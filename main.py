@@ -14,29 +14,29 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-LOG_FILE = "winmonitor.log"
-LOG_MAX_BYTES = 5 * 1024 * 1024
-LOG_BACKUP_COUNT = 3
+import config
+import asset_mon
+import audit_mon
+import file_mon
+import network_mon
+import process_mon
+import registry_mon
 
 # 日志滚动配置：当日志文件超过 5MB 时保留最近 3 个备份
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         RotatingFileHandler(
-            LOG_FILE,
-            maxBytes=LOG_MAX_BYTES,
-            backupCount=LOG_BACKUP_COUNT,
+            config.LOG_FILE,
+            maxBytes=config.LOG_MAX_BYTES,
+            backupCount=config.LOG_BACKUP_COUNT,
             encoding="utf-8",
         ),
         logging.StreamHandler(),
     ],
 )
-
-import file_mon
-import network_mon
-import process_mon
 
 
 class WinMonitorApp:
@@ -50,7 +50,7 @@ class WinMonitorApp:
         self.stop_event = None
         self.results = None
         self.threads = []
-        self.alert_queue = queue.Queue()
+        self.alert_queue = queue.Queue(maxsize=config.MAX_ALERT_QUEUE_SIZE)
         self.shown_alert_signatures = set()
 
         self._build_ui()
@@ -77,7 +77,8 @@ class WinMonitorApp:
         info_frame.grid(row=1, column=0, padx=12, pady=(0, 12), sticky="ew")
 
         info_text = (
-            "支持三个并发模块：进程检测、文件监控、网络连接监控。\n"
+            "Windows HIDS 风格监控：进程、文件、网络、注册表、审计与资产清点。\n"
+            "新增误用检测、异常检测、完整性检查、恶意代码防护与阻断能力。\n"
             "点击开始启动监控，暂停停止监控并打印本次检测结果。"
         )
         info_label = ttk.Label(info_frame, text=info_text, justify="left")
@@ -181,6 +182,9 @@ class WinMonitorApp:
             else:
                 lines.append(f"  [{event['time']}] {event['action']} {event['path']}")
 
+        integrity_events = results.get("integrity_events", [])
+        lines.append(f"完整性检查告警: {len(integrity_events)} 条")
+
         normal_count = sum(1 for event in network_events if event.get("type") == "normal")
         abnormal_events = [event for event in network_events if event.get("type") == "abnormal"]
         attack_events = [event for event in network_events if event.get("type") == "attack"]
@@ -200,6 +204,18 @@ class WinMonitorApp:
                     f"  [{event['time']}] {event['status']} {event['local']} -> {event['remote']} ({event['reason']}) pid={event['pid']}"
                 )
 
+        registry_events = results.get("registry_events", [])
+        lines.append(f"注册表变更: {len(registry_events)} 条")
+
+        audit_events = results.get("audit_events", [])
+        lines.append(f"审计异常: {len(audit_events)} 条")
+
+        asset_inventory = results.get("asset_inventory", {})
+        if asset_inventory:
+            lines.append(
+                f"资产清点: 主机={asset_inventory.get('computer_name', '-')}, 操作系统={asset_inventory.get('os_version', '-')}, 内存={asset_inventory.get('physical_memory_gb', '-') }GB"
+            )
+
         lines.append("====================")
         return "\n".join(lines)
 
@@ -212,7 +228,11 @@ class WinMonitorApp:
         self.results = {
             "process_events": [],
             "file_events": [],
+            "integrity_events": [],
             "network_events": [],
+            "registry_events": [],
+            "audit_events": [],
+            "asset_inventory": {},
         }
         self.shown_alert_signatures.clear()
 
@@ -220,6 +240,9 @@ class WinMonitorApp:
             threading.Thread(target=process_mon.p_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
             threading.Thread(target=file_mon.f_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
             threading.Thread(target=network_mon.n_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
+            threading.Thread(target=registry_mon.r_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
+            threading.Thread(target=audit_mon.audit_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
+            threading.Thread(target=asset_mon.asset_mon, args=(self.stop_event, self.results, self.alert_queue), daemon=True),
         ]
 
         for thread in self.threads:
@@ -237,7 +260,7 @@ class WinMonitorApp:
 
         self.stop_event.set()
         for thread in self.threads:
-            thread.join(timeout=5)
+            thread.join(timeout=config.THREAD_JOIN_TIMEOUT)
 
         self.status_var.set("状态：已暂停")
         self.start_button.configure(state="normal")
@@ -251,7 +274,7 @@ class WinMonitorApp:
         if self.stop_event is not None and not self.stop_event.is_set():
             self.stop_event.set()
             for thread in self.threads:
-                thread.join(timeout=5)
+                thread.join(timeout=config.THREAD_JOIN_TIMEOUT)
 
         self.root.quit()
         self.root.destroy()

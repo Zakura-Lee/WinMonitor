@@ -1,63 +1,47 @@
-#!/usr/bin/env python3.14
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 模块名: network_mon.py
-功能: windows网络连接监控
+功能: Windows 网络连接监控与阻断
 """
 
 import logging
+import re
+import socket
+import subprocess
 import time
 
-import psutil
+import pythoncom
+import win32api
+import win32con
+import win32process
+from win32com.client import Dispatch
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+import config
+from process_mon import normalize_text
 
+WMI = None
+WMI_STD = None
 
-def _addr_to_str(addr):
-    # 将 psutil 地址对象转换为字符串表示形式 ip:port
-    if not addr:
-        return ""
-    if hasattr(addr, "ip"):
-        return f"{addr.ip}:{addr.port}"
-    return f"{addr[0]}:{addr[1]}"
-
-
-# 网络端口与状态规则，用于区分普通连接、异常连接与攻击告警
-SUSPICIOUS_NETWORK_PORTS = {
-    23, 445, 3389, 5900, 6667, 2222
-}
-
-DANGEROUS_REMOTE_PORTS = {
-    4444, 5555, 12345, 27374, 31337
-}
-
-HIGH_RISK_REMOTE_PORTS = {4444, 1337, 3389, 445}
-SQL_REMOTE_PORTS = {1433, 3306, 5432, 1521, 1434, 33060}
-
-ATTACK_STATUSES = {"SYN_SENT", "SYN_RECV"}
-SAFE_PUBLIC_PORTS = {80, 443, 53, 123, 25, 587, 110, 995, 993, 143}
-
-PRIVATE_PREFIXES = ("10.", "172.", "192.168.", "127.")
-TEMP_PATH_PATTERNS = ("\\temp\\", "\\appdata\\local\\temp", "\\windows\\temp")
-SUSPICIOUS_PARENT_NAMES = {
-    "powershell.exe",
-    "cmd.exe",
-    "wscript.exe",
-    "cscript.exe",
-    "rundll32.exe",
-    "regsvr32.exe",
-    "wmic.exe",
-    "mshta.exe",
-    "svchost.exe",
-}
+HIGH_RISK_REMOTE_PORTS = config.HIGH_RISK_REMOTE_PORTS
+SQL_REMOTE_PORTS = config.SQL_REMOTE_PORTS
+ATTACK_STATUSES = config.ATTACK_STATUSES
+SAFE_PUBLIC_PORTS = config.SAFE_PUBLIC_PORTS
+PRIVATE_PREFIXES = config.PRIVATE_PREFIXES
+NETWORK_TRUSTED_PROCESS_NAMES = config.NETWORK_TRUSTED_PROCESS_NAMES
+NETWORK_TRUSTED_PROCESS_PATHS = config.NETWORK_TRUSTED_PROCESS_PATHS
+NETWORK_TRUSTED_REMOTE_HOST_PATTERNS = config.NETWORK_TRUSTED_REMOTE_HOST_PATTERNS
+NETWORK_SUSPICION_SCORE_THRESHOLD = config.NETWORK_SUSPICION_SCORE_THRESHOLD
+NETWORK_HIGH_RISK_SCORE = config.NETWORK_HIGH_RISK_SCORE
+NETWORK_STATUS_SCORE = config.NETWORK_STATUS_SCORE
+NETWORK_PROCESS_SCORE = config.NETWORK_PROCESS_SCORE
+NETWORK_REMOTE_SCORE = config.NETWORK_REMOTE_SCORE
+TEMP_PATH_PATTERNS = config.TEMP_PATH_PATTERNS
+SUSPICIOUS_PARENT_NAMES = config.SUSPICIOUS_PARENT_NAMES
+REMOTE_HOST_CACHE = {}
 
 
 def _is_public_address(remote):
-    # 判断远程地址是否为公网地址，排除私有网段和本机环回地址
     if not remote:
         return False
     address = remote.split(":")[0]
@@ -65,7 +49,6 @@ def _is_public_address(remote):
 
 
 def _get_remote_port(remote):
-    # 从远程地址字符串中提取端口号，用于端口风险判断
     try:
         return int(remote.split(":")[-1])
     except (ValueError, IndexError):
@@ -73,14 +56,95 @@ def _get_remote_port(remote):
 
 
 def _normalize_path(path):
-    # 标准化进程路径，方便后续路径匹配和临时目录判断
     if not path:
         return ""
     return path.lower().replace("/", "\\")
 
 
+def _build_connection_from_wmi_event(event):
+    target = getattr(event, "TargetInstance", None)
+    if target is None:
+        return None
+
+    pid = int(getattr(target, "OwningProcess", 0))
+    local_address = normalize_text(getattr(target, "LocalAddress", ""))
+    local_port = getattr(target, "LocalPort", "")
+    remote_address = normalize_text(getattr(target, "RemoteAddress", ""))
+    remote_port = getattr(target, "RemotePort", "")
+    status = normalize_text(getattr(target, "State", ""))
+
+    local = f"{local_address}:{local_port}"
+    remote = f"{remote_address}:{remote_port}"
+    return pid, local, remote, status
+
+
+def _subscribe_network_events():
+    if WMI_STD is None:
+        return None
+    try:
+        query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'MSFT_NetTCPConnection'"
+        return WMI_STD.ExecNotificationQuery(query)
+    except Exception as exc:
+        logging.info("WMI 实时网络事件订阅不可用，回退到轮询模式: %s", exc)
+        return None
+
+
+def _fetch_wmi_connections():
+    connections = set()
+    if WMI_STD is None:
+        return connections
+    try:
+        items = WMI_STD.ExecQuery("SELECT * FROM MSFT_NetTCPConnection")
+        for item in items:
+            pid = int(getattr(item, "OwningProcess", 0))
+            local = f"{normalize_text(getattr(item, 'LocalAddress', ''))}:{getattr(item, 'LocalPort', '')}"
+            remote = f"{normalize_text(getattr(item, 'RemoteAddress', ''))}:{getattr(item, 'RemotePort', '')}"
+            status = normalize_text(getattr(item, "State", ""))
+            connections.add((pid, local, remote, status))
+    except Exception as exc:
+        logging.debug("WMI 连接轮询失败: %s", exc)
+    return connections
+
+
+def _resolve_remote_hostname(address):
+    if not address or address in {"*", "0.0.0.0", "::"}:
+        return ""
+    if address in REMOTE_HOST_CACHE:
+        return REMOTE_HOST_CACHE[address]
+    try:
+        hostname = socket.gethostbyaddr(address)[0].lower()
+    except Exception:
+        hostname = ""
+    REMOTE_HOST_CACHE[address] = hostname
+    return hostname
+
+
+def init_wmi():
+    global WMI, WMI_STD
+    if WMI is None:
+        try:
+            WMI = Dispatch("WbemScripting.SWbemLocator").ConnectServer(".", "root\\cimv2")
+        except Exception:
+            WMI = None
+    if WMI_STD is None:
+        try:
+            WMI_STD = Dispatch("WbemScripting.SWbemLocator").ConnectServer(".", "root\\StandardCimv2")
+        except Exception:
+            WMI_STD = None
+    return WMI, WMI_STD
+
+
+def _is_trusted_remote_host(remote):
+    if not remote or ":" not in remote:
+        return False
+    address = remote.split(":")[0]
+    hostname = _resolve_remote_hostname(address)
+    if not hostname:
+        return False
+    return any(pattern in hostname for pattern in NETWORK_TRUSTED_REMOTE_HOST_PATTERNS)
+
+
 def _get_process_context(pid):
-    # 获取进程基础信息并判断是否为临时目录程序或可疑父进程启动
     context = {
         "pid": pid,
         "name": "",
@@ -94,12 +158,20 @@ def _get_process_context(pid):
         return context
 
     try:
-        proc = psutil.Process(pid)
-        context["name"] = proc.name().lower()
-        context["exe_path"] = _normalize_path(proc.exe())
-        parent = proc.parent()
-        context["parent_name"] = parent.name().lower() if parent is not None else ""
-    except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, OSError):
+        items = WMI.ExecQuery(f"SELECT Name, ExecutablePath, ParentProcessId FROM Win32_Process WHERE ProcessId={pid}")
+        for item in items:
+            context["name"] = normalize_text(getattr(item, "Name", ""))
+            context["exe_path"] = _normalize_path(getattr(item, "ExecutablePath", ""))
+            parent_pid = int(getattr(item, "ParentProcessId", 0))
+            if parent_pid > 0:
+                try:
+                    parent_items = WMI.ExecQuery(f"SELECT Name FROM Win32_Process WHERE ProcessId={parent_pid}")
+                    for parent in parent_items:
+                        context["parent_name"] = normalize_text(getattr(parent, "Name", ""))
+                except Exception:
+                    context["parent_name"] = ""
+            break
+    except Exception:
         return context
 
     normalized_exe = context["exe_path"]
@@ -108,41 +180,103 @@ def _get_process_context(pid):
     return context
 
 
+def _is_trusted_process_context(context):
+    if context["name"] in NETWORK_TRUSTED_PROCESS_NAMES:
+        return True
+    if context["parent_name"] in NETWORK_TRUSTED_PROCESS_NAMES:
+        return True
+    if any(context["exe_path"].startswith(path) for path in NETWORK_TRUSTED_PROCESS_PATHS):
+        return True
+    return False
+
+
 def _is_suspicious_process(context):
-    # 进程被判定为可疑的条件：临时目录执行或启动父进程不寻常
+    if _is_trusted_process_context(context):
+        return False
     return context["is_temp_path"] or context["has_suspicious_parent"]
 
 
-def _is_high_risk_remote(remote_port):
-    return remote_port in HIGH_RISK_REMOTE_PORTS
+def _network_risk_score(context, remote_port, status, is_external):
+    score = 0
+    if not _is_trusted_process_context(context):
+        if context["is_temp_path"] or context["has_suspicious_parent"]:
+            score += NETWORK_PROCESS_SCORE
+    if remote_port in HIGH_RISK_REMOTE_PORTS or remote_port in SQL_REMOTE_PORTS:
+        score += NETWORK_REMOTE_SCORE
+    if status in ATTACK_STATUSES and is_external:
+        score += NETWORK_STATUS_SCORE
+    return score
 
 
-def _is_sql_remote(remote_port):
-    return remote_port in SQL_REMOTE_PORTS
+def block_network_process(pid, reason):
+    try:
+        handle = win32api.OpenProcess(win32con.PROCESS_TERMINATE | win32con.PROCESS_QUERY_INFORMATION, False, pid)
+        win32process.TerminateProcess(handle, 1)
+        win32api.CloseHandle(handle)
+        logging.warning("已阻断可疑网络进程 pid=%s, 原因=%s", pid, reason)
+        return True
+    except Exception as exc:
+        logging.debug("阻断网络进程失败 pid=%s: %s", pid, exc)
+        return False
 
 
-def n_mon(stop_event, results, alert_queue=None, interval=1):
-    # 网络监控主循环：比较当前与上次连接状态，识别新增连接并分类记录/告警
+def _parse_netstat():
+    connections = set()
+    try:
+        proc = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, errors="ignore", shell=False, timeout=10)
+        lines = proc.stdout.splitlines()
+        for line in lines:
+            line = line.strip()
+            if not line or not (line.startswith("TCP") or line.startswith("UDP")):
+                continue
+            # 使用正则表达式更健壮地解析
+            match = re.match(r'(TCP|UDP)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*(.*)', line)
+            if match:
+                proto, local, remote, status, pid = match.groups()
+                if proto == "UDP" and not status:
+                    status = "NONE"
+                    pid = remote  # 对于 UDP，pid 在 remote 位置
+                    remote = "*:*"
+                try:
+                    pid = int(pid)
+                except ValueError:
+                    pid = 0
+                connections.add((pid, local, remote, status))
+            else:
+                logging.debug("无法解析 netstat 行: %s", line)
+    except subprocess.TimeoutExpired:
+        logging.warning("netstat 命令超时")
+    except Exception as exc:
+        logging.debug("解析 netstat 输出失败: %s", exc)
+    return connections
+
+
+def n_mon(stop_event, results, alert_queue=None):
     previous_connections = set()
     syn_sent_history = {}
     logging.info("网络监控已启动")
-
+    pythoncom.CoInitialize()
     try:
+        init_wmi()
+        event_source = _subscribe_network_events()
+
         while not stop_event.is_set():
-            current_connections = set()
-            try:
-                # 获取当前所有 TCP/UDP 连接，逐条转换为可比较的字符串形式
-                for conn in psutil.net_connections(kind="inet"):
-                    if not conn.raddr:
-                        continue
-                    local = _addr_to_str(conn.laddr)
-                    remote = _addr_to_str(conn.raddr)
-                    current_connections.add((conn.pid or 0, local, remote, conn.status))
-            except (psutil.AccessDenied, psutil.NoSuchProcess, PermissionError):
-                logging.debug("读取网络连接时遇到权限或进程错误，已忽略")
+            if event_source is not None:
+                try:
+                    event = event_source.NextEvent(1000)
+                    conn = _build_connection_from_wmi_event(event)
+                    current_connections = {conn} if conn else set()
+                except Exception:
+                    current_connections = set()
+            else:
+                if WMI_STD is not None:
+                    current_connections = _fetch_wmi_connections()
+                    if not current_connections:
+                        current_connections = _parse_netstat()
+                else:
+                    current_connections = _parse_netstat()
 
             now = time.monotonic()
-            # 清理旧的 SYN_SENT 记录，保留最近 1 秒内的连接尝试
             for pid, timestamps in list(syn_sent_history.items()):
                 syn_sent_history[pid] = [ts for ts in timestamps if now - ts <= 1.0]
                 if not syn_sent_history[pid]:
@@ -153,29 +287,38 @@ def n_mon(stop_event, results, alert_queue=None, interval=1):
                 remote_port = _get_remote_port(remote)
                 is_external = _is_public_address(remote)
                 process_context = _get_process_context(pid)
-                suspicious_process = _is_suspicious_process(process_context)
-                high_risk_remote = _is_high_risk_remote(remote_port)
-                sql_remote = _is_sql_remote(remote_port)
+                high_risk_remote = remote_port in HIGH_RISK_REMOTE_PORTS
+                sql_remote = remote_port in SQL_REMOTE_PORTS
+                trusted_remote = _is_trusted_remote_host(remote)
                 abnormal_status = status in ATTACK_STATUSES and remote_port not in SAFE_PUBLIC_PORTS and is_external
+                risk_score = _network_risk_score(process_context, remote_port, status, is_external)
+
+                if trusted_remote and not high_risk_remote and not sql_remote:
+                    risk_score = 0
+                    abnormal_status = False
+
+                if _is_trusted_process_context(process_context) and trusted_remote:
+                    risk_score = 0
+                    abnormal_status = False
 
                 if status == "SYN_SENT" and is_external:
                     syn_sent_history.setdefault(pid, []).append(now)
 
                 syn_sent_count = len(syn_sent_history.get(pid, []))
                 syn_sent_alert = syn_sent_count >= 10
-                single_syn_sent = status == "SYN_SENT" and is_external and syn_sent_count < 10
+                single_syn_sent = status == "SYN_SENT" and is_external and syn_sent_count < 10 and not trusted_remote
 
                 event_type = "normal"
                 reason = "新连接"
                 log_only = False
                 alert_severity = None
+                blocked = False
 
                 if single_syn_sent:
                     event_type = "abnormal"
                     reason = f"SYN_SENT 单次尝试 ({syn_sent_count})"
                     log_only = True
-
-                elif is_external and suspicious_process:
+                elif risk_score >= NETWORK_SUSPICION_SCORE_THRESHOLD:
                     if high_risk_remote:
                         event_type = "attack"
                         reason = f"高危端口连接 {remote_port}"
@@ -192,6 +335,9 @@ def n_mon(stop_event, results, alert_queue=None, interval=1):
                         event_type = "abnormal"
                         reason = f"异常连接状态 {status}"
                         log_only = True
+                    else:
+                        event_type = "abnormal"
+                        reason = "多维度异常网络连接"
                 elif high_risk_remote and is_external:
                     event_type = "abnormal"
                     reason = f"高危端口连接 {remote_port}"
@@ -213,7 +359,15 @@ def n_mon(stop_event, results, alert_queue=None, interval=1):
                     "process_name": process_context["name"],
                     "process_exe": process_context["exe_path"],
                     "parent_name": process_context["parent_name"],
+                    "blocked": False,
                 }
+                if event_type == "attack" and pid > 0:
+                    blocked = block_network_process(pid, reason)
+                    details["blocked"] = blocked
+                    if blocked:
+                        reason += "，已阻断可疑进程"
+                        details["reason"] = reason
+
                 results.setdefault("network_events", []).append(details)
 
                 if event_type == "normal":
@@ -237,7 +391,12 @@ def n_mon(stop_event, results, alert_queue=None, interval=1):
                             "severity": alert_severity,
                         })
 
+            if event_source is None:
+                time.sleep(0.2)
             previous_connections = current_connections
-            time.sleep(interval)
     finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
         logging.info("网络监控已停止")
