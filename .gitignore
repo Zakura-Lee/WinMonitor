@@ -1,0 +1,24 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 数据、模型、检查点
+data/
+datasets/
+checkpoints/
+runs/
+logs/
+
+# Jupyter 缓存
+.ipynb_checkpoints/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
