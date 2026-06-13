@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 已停止</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <h1>系统已停止</h1>
+      <p>WinMonitor 已停止所有后台监控任务。</p>
+      <p>如果浏览器未自动关闭，请手动关闭当前窗口。</p>
+      <button id="closePage">关闭页面</button>
+    </div>
+  </div>
+  <script>
+    document.getElementById('closePage')?.addEventListener('click', () => {
+      window.open('', '_self');
+      window.close();
+    });
+  </script>
+</body>
+</html>

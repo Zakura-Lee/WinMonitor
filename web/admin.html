@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 管理面板</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>管理员管理面板</h1>
+          <p>当前用户: <strong id="userName"></strong> (<span id="userRole"></span>)</p>
+        </div>
+        <button id="logoutButton">退出登录</button>
+      </div>
+      <div id="pageMessage" class="page-message" style="display:none;color:#d33;margin:8px 0;font-weight:600;"></div>
+
+      <div class="toolbar">
+        <button id="refreshButton">刷新数据</button>
+        <a class="button-link" href="/menu">返回菜单</a>
+        <a class="button-link" href="/dashboard">返回仪表盘</a>
+        <a class="button-link" href="/logs.html">查看日志</a>
+      </div>
+
+      <div class="admin-grid">
+        <div class="control-card">
+          <h2>用户列表</h2>
+          <div id="userList">正在加载...</div>
+        </div>
+
+        <div class="control-card">
+          <h2>审批请求</h2>
+          <div id="adminRequests">正在加载...</div>
+        </div>
+      </div>
+
+      <div class="control-card">
+        <h2>审计日志</h2>
+        <div id="auditLogs" class="audit-logs">正在加载审计日志...</div>
+      </div>
+    </div>
+  </div>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

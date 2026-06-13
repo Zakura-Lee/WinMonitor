@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 仪表盘</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>WinMonitor 仪表盘</h1>
+          <p>当前用户: <strong id="userName"></strong> (<span id="userRole"></span>)</p>
+        </div>
+        <div class="top-actions">
+          <a class="button-link" href="/menu">返回菜单</a>
+          <a id="adminLink" class="button-link" href="/admin" style="display:none;">管理面板</a>
+          <button id="logoutButton">退出登录</button>
+        </div>
+      </div>
+      <div id="pageMessage" class="page-message" style="display:none;color:#d33;margin:8px 0;font-weight:600;"></div>
+
+      <div class="control-panel">
+        <div class="control-card">
+          <h2>监控控制</h2>
+          <div class="control-actions">
+            <button id="startButton">开始监控</button>
+            <button id="pauseButton">暂停监控</button>
+            <button id="stopButton">退出监控</button>
+          </div>
+          <div id="monitorAnimation" class="monitor-animation" style="display:none;">
+            <div class="spinner"></div>
+            <span>正在持续监控中......</span>
+          </div>
+          <p id="monitorStatus">正在加载监控状态...</p>
+        </div>
+
+        <div class="control-card">
+          <h2>统计信息</h2>
+          <p id="summaryContent">正在加载...</p>
+          <p id="detailContent">&nbsp;</p>
+          <div class="control-actions">
+            <button id="refreshButton">刷新状态</button>
+            <button id="viewLogsButton">查看日志</button>
+            <button id="viewProcessesButton">查看当前进程</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="summary">
+        <h2>严重告警</h2>
+        <div id="criticalAlertPanel" class="critical-alert-panel">暂无严重告警。</div>
+      </div>
+
+      <div class="summary">
+        <h2>进程变化统计</h2>
+        <div id="processChangeList" class="process-changes">暂无进程变化。</div>
+      </div>
+
+      <div class="summary">
+        <h2>当前运行进程</h2>
+        <div id="currentProcesses" class="process-list">请点击"查看当前进程"加载当前进程信息。</div>
+      </div>
+    </div>
+  </div>
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>

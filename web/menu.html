@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 菜单</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>欢迎使用 WinMonitor</h1>
+          <p>当前用户: <strong id="userName"></strong> (<span id="userRole"></span>)</p>
+        </div>
+        <div class="top-actions">
+          <button id="exitSystemButton" type="button">退出系统</button>
+          <button id="logoutButton">退出登录</button>
+        </div>
+      </div>
+      <div id="passwordResetAlert" class="alert-warning" style="display:none;">
+        <span>⚠️ 您的密码已被重置为初始密码，请尽快修改密码！</span>
+        <a href="/profile">立即修改</a>
+      </div>
+      <div id="pageMessage" class="page-message" style="display:none;color:#d33;margin:8px 0;font-weight:600;"></div>
+      <div class="summary">
+        <h2>请选择一个功能</h2>
+        <div class="menu-grid">
+          <a class="menu-card" href="/dashboard">
+            <h3>监控仪表盘</h3>
+            <p>实时启动/暂停监控，查看进程变化与运行状态。</p>
+          </a>
+          <a class="menu-card" href="/logs.html">
+            <h3>日志查看</h3>
+            <p>查看系统日志、进程变化和监控事件。</p>
+          </a>
+          <a class="menu-card" href="/profile">
+            <h3>个人中心</h3>
+            <p>修改用户名、修改密码和查看个人设置。</p>
+          </a>
+          <a id="adminPanelCard" class="menu-card" href="/admin" style="display:none;">
+            <h3>管理面板</h3>
+            <p>管理员专用：审计日志、用户和请求管理。</p>
+          </a>
+        </div>
+      </div>
+      <div class="summary">
+        <h2>操作提示</h2>
+        <p>登录后请先进入“监控仪表盘”，点击“开始监控”。</p>
+      </div>
+    </div>
+  </div>
+  <script src="/js/menu.js"></script>
+</body>
+</html>

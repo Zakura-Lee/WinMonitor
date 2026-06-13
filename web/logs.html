@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 日志查看</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>日志查看</h1>
+          <p>当前用户: <strong id="userName"></strong> (<span id="userRole"></span>)</p>
+        </div>
+        <button id="logoutButton">退出登录</button>
+      </div>
+
+      <div class="toolbar">
+        <button id="refreshButton">刷新日志</button>
+        <a class="button-link" href="/menu">返回菜单</a>
+        <a class="button-link" href="/dashboard">返回仪表盘</a>
+      </div>
+
+      <div class="summary">
+        <h2>日志内容</h2>
+        <p id="logsSummary">正在加载...</p>
+      </div>
+
+      <div id="logEntries" class="log-list">正在加载日志...</div>
+    </div>
+  </div>
+  <script src="/js/logs.js"></script>
+</body>
+</html>

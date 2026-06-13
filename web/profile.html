@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>个人中心 - WinMonitor</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>个人中心</h1>
+          <p>当前用户: <strong id="userName"></strong> (<span id="userRole"></span>)</p>
+        </div>
+        <button id="logoutButton">退出登录</button>
+      </div>
+      <div id="pageMessage" class="page-message" style="display:none;color:#d33;margin:8px 0;font-weight:600;"></div>
+      <div class="toolbar">
+        <a class="button-link" href="/menu">返回菜单</a>
+        <a class="button-link" href="/dashboard">监控仪表盘</a>
+        <a class="button-link" href="/logs.html">日志查看</a>
+      </div>
+      <div class="summary">
+        <h2>修改用户名</h2>
+        <form id="usernameForm">
+          <label for="new_username">新用户名</label>
+          <input type="text" id="new_username" name="new_username" placeholder="输入新用户名" required />
+          <label for="current_password_for_username">当前密码</label>
+          <input type="password" id="current_password_for_username" name="current_password_for_username" placeholder="输入当前密码" required />
+          <button type="submit">保存用户名</button>
+          <small id="usernameMessage"></small>
+        </form>
+      </div>
+      <div class="summary">
+        <h2>修改密码</h2>
+        <form id="passwordForm">
+          <label for="current_password">当前密码</label>
+          <input type="password" id="current_password" name="current_password" placeholder="输入当前密码" required />
+          <label for="new_password">新密码</label>
+          <input type="password" id="new_password" name="new_password" placeholder="输入新密码" required />
+          <label for="confirm_password">确认新密码</label>
+          <input type="password" id="confirm_password" name="confirm_password" placeholder="再次输入新密码" required />
+          <button type="submit">保存密码</button>
+          <small id="passwordMessage"></small>
+        </form>
+      </div>
+      <div class="summary">
+        <h2>注销账号</h2>
+        <p>删除当前账号将无法恢复，请慎重操作。</p>
+        <button id="deleteAccountButton" class="danger-button">注销当前账号</button>
+      </div>
+    </div>
+  </div>
+  <script src="/js/profile.js"></script>
+</body>
+</html>

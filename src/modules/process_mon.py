@@ -16,7 +16,6 @@ import win32api
 import win32con
 import win32process
 from win32com.client import Dispatch
-from plyer import notification
 
 import config
 
@@ -106,15 +105,6 @@ def is_safe_maintenance_process(info):
     return False
 
 
-def notify(title, message, timeout=5):
-    notification.notify(
-        title=title,
-        message=message.strip(),
-        timeout=timeout,
-        app_name="WinMonitor",
-    )
-
-
 def query_wmi_process(pid):
     if init_wmi() is None:
         return "", 0
@@ -192,6 +182,37 @@ def get_process_info(pid):
                 info["hash_mismatch"] = True
 
     return info
+
+
+def collect_current_processes(limit=30):
+    pythoncom.CoInitialize()
+    try:
+        try:
+            process_ids = win32process.EnumProcesses()
+        except Exception:
+            return []
+        process_infos = []
+        for pid in sorted(set(process_ids))[:limit]:
+            info = get_process_info(pid)
+            if info["name"]:
+                process_infos.append(
+                    {
+                        "pid": info["pid"],
+                        "name": info["name"],
+                        "exe_path": info["exe_path"],
+                        "ppid": info["ppid"],
+                        "pname": info["pname"],
+                        "cpu": info["cpu"],
+                        "mem": info["mem"],
+                        "cmdline": " ".join(info["cmdline"][:10]),
+                    }
+                )
+        return process_infos
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 
 def compute_cpu_percent(pid, cpu_seconds):
@@ -369,6 +390,61 @@ def p_mon(stop_event, results, alert_queue=None, interval=config.PROCESS_MON_INT
                     pending_new_pids.update(new_pids)
                 if gone_pids:
                     pending_gone_pids.update(gone_pids)
+
+                current_event_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                process_changes = results.setdefault("process_changes", [])
+                last_process_info = results.setdefault("last_process_info", {})
+
+                for pid in new_pids:
+                    info = get_process_info(pid)
+                    if not info["name"]:
+                        continue
+                    last_process_info[pid] = {
+                        "pid": info["pid"],
+                        "name": info["name"],
+                        "exe_path": info["exe_path"],
+                        "ppid": info["ppid"],
+                        "pname": info["pname"],
+                        "cpu": info["cpu"],
+                        "mem": info["mem"],
+                        "cmdline": " ".join(info["cmdline"][:10]),
+                    }
+                    process_changes.insert(
+                        0,
+                        {
+                            "time": current_event_time,
+                            "type": "started",
+                            "pid": info["pid"],
+                            "name": info["name"],
+                            "exe_path": info["exe_path"],
+                            "ppid": info["ppid"],
+                            "pname": info["pname"],
+                            "cpu": info["cpu"],
+                            "mem": info["mem"],
+                            "cmdline": " ".join(info["cmdline"][:10]),
+                        },
+                    )
+
+                for pid in gone_pids:
+                    detail = last_process_info.pop(pid, None) or {"pid": pid, "name": "未知", "exe_path": "", "ppid": 0, "pname": "", "cpu": 0.0, "mem": 0.0, "cmdline": ""}
+                    process_changes.insert(
+                        0,
+                        {
+                            "time": current_event_time,
+                            "type": "stopped",
+                            "pid": detail["pid"],
+                            "name": detail["name"],
+                            "exe_path": detail["exe_path"],
+                            "ppid": detail["ppid"],
+                            "pname": detail["pname"],
+                            "cpu": detail["cpu"],
+                            "mem": detail["mem"],
+                            "cmdline": detail["cmdline"],
+                        },
+                    )
+
+                if len(process_changes) > 100:
+                    del process_changes[100:]
 
                 inspect_new_processes({}, new_pids, results, alert_queue)
                 previous_pids = current_pids

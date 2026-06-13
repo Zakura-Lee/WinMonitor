@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinMonitor 登录</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="page-layout">
+    <div class="card">
+      <h1>WinMonitor 登录</h1>
+      <form id="loginForm">
+        <label for="user_type">用户类型</label>
+        <select id="user_type" name="user_type">
+          <option value="normal">普通用户</option>
+          <option value="admin">管理员</option>
+        </select>
+
+        <label for="username">用户名</label>
+        <input type="text" id="username" name="username" placeholder="请输入用户名" required />
+
+        <label for="password">密码</label>
+        <input type="password" id="password" name="password" placeholder="请输入密码" required />
+
+        <button type="submit">登录</button>
+        <small id="message"></small>
+      </form>
+      <div class="link-row">
+        <span>没有账号？</span>
+        <a href="/register">注册新账号</a>
+      </div>
+      <div class="link-row">
+        <span>忘记密码？</span>
+        <a href="#" id="forgotPasswordLink">重置密码</a>
+      </div>
+      <div class="link-row">
+        <button id="exitSystemButton" type="button">退出系统</button>
+      </div>
+    </div>
+  </div>
+  <script src="/js/auth.js"></script>
+</body>
+</html>

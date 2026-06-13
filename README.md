@@ -4,115 +4,216 @@ Windows HIDS 风格本地安全监控工具
 
 ## 概述
 
-WinMonitor 是一个面向 Windows 的本地安全监控工具，基于 `pywin32` 原生调用实现更贴近系统的监控能力。它结合了进程、文件、网络、注册表、审计日志与资产清点功能，额外提供误用检测、异常检测、完整性检查和阻断机制。
+WinMonitor 是一个面向 Windows 的本地安全监控工具，采用前后端分离架构：
+- **后端**：基于 Flask 框架，提供 RESTful API
+- **前端**：纯 HTML/CSS/JavaScript，无需构建工具
+- **数据库**：MySQL 存储用户、日志、告警数据
 
 ## 运行环境
 
 - Windows 平台
-- Python 3.14 及以上版本
+- Python 3.8 及以上版本
+- MySQL 5.7 及以上版本
 - 依赖包通过 `requirements.txt` 安装
-- 需要系统自带的 `tkinter` GUI 支持
 
-## 关键功能
+## 项目结构
 
-- 进程监控
-  - 基于 Windows 原生 API 读取进程信息
-  - 检测可疑启动路径、命令行参数、父进程、资源异常等行为
-  - 支持基础完整性校验和可疑进程阻断
-  - 过滤 Windows 更新/Office/WPS/.NET 优化父进程触发的正常维护行为
-- 文件监控
-  - 使用 `watchdog` 监听文件创建、修改、删除、移动
-  - 支持系统文件完整性检查和危险文件操作告警
-  - 结合危险扩展与敏感路径评分，过滤正常缓存、Windows Update、Microsoft Store、.NET 优化、Office/WPS 更新、VS Code SQLite 数据库操作与系统维护行为，降低误报
-  - 额外忽略开发环境中的 `tclIndex` 和 `bgerror.tcl` 文件频繁变动
-- 网络监控
-  - 通过 `pywin32` / WMI 实时订阅网络连接事件，若 WMI 订阅不可用则回退到轮询解析
-  - 检测外部高危端口、SQL 端口及 SYN 洪泛异常
-  - 识别 GitHub、腾讯云、Windows Update / Microsoft Store 等正规服务的正常通信，降低误报
-  - 可疑连接触发阻断可疑进程
-- 注册表监控
-  - 监控常见启动项与服务注册表项变更
-  - 对新增、修改、删除操作进行日志记录与可疑告警
-  - 安全白名单过滤系统任务项，避免注册表枚举越界误判
-- 审计日志分析
-  - 读取系统审计日志中的可疑事件
-  - 识别可疑进程创建、登录失败、服务安装、审计日志清除等行为
-- 系统资产清点
-  - 收集主机名称、操作系统、内存、磁盘与网络适配器信息
-  - 兼顾 WMI 与本机内存回退获取，减少清点失败和内存采集异常
-  - 定期更新资产快照
-
-## 模块说明
-
-- `main.py`
-  - GUI 主入口
-  - 启动并管理各个监控线程
-  - 汇总并展示当前会话监控结果
-- `process_mon.py`
-  - 基于 `pywin32` 读取本机进程信息
-  - 实现误用检测、异常检测与完整性检查
-  - 仅记录可疑进程事件，过滤正常启动记录，减少噪音
-  - 新增/死亡进程通知改为每分钟汇总通知，并在停止监控时补发未通知的汇总
-- `file_mon.py`
-  - 基于 `watchdog` 实时捕获文件变化
-  - 新增关键系统文件完整性校验机制
-  - 对危险脚本与可执行文件操作进行告警处理
-- `network_mon.py`
-  - 通过 `pywin32` / WMI 实时订阅网络连接事件，若订阅不可用则回退到 `netstat` 或 WMI 轮询
-  - 检测异常连接与攻击行为，并对可疑进程执行阻断
-  - 支持高危外部端口、SQL 端口和 SYN 异常检测
-- `registry_mon.py`
-  - 实时/周期混合监控常见启动项与服务注册表项
-  - 记录新增、删除、修改事件
-  - 对可疑注册表变更生成告警
-- `audit_mon.py`
-  - 分析 Windows 审计日志
-  - 发现可疑安全事件并发布告警
-- `asset_mon.py`
-  - 基于 WMI 采集系统资产信息
-  - 定期更新资产清点结果
-
-## 安装依赖
-
-```powershell
-python -m pip install -r requirements.txt
+```
+WinMonitor/
+├── src/                    # 后端核心代码
+│   ├── app.py              # Flask 应用入口
+│   ├── config.py           # 配置文件
+│   ├── core/               # 监控服务核心
+│   │   └── monitor.py      # 监控服务管理
+│   ├── db/                 # 数据库相关
+│   │   ├── setup.py        # 数据库初始化
+│   │   └── connection.py   # 数据库连接
+│   ├── models/             # 数据模型
+│   │   ├── user_model.py   # 用户模型
+│   │   ├── log_model.py    # 日志模型
+│   │   └── user_request_model.py  # 用户请求模型
+│   ├── modules/            # 监控模块
+│   │   ├── process_mon.py  # 进程监控
+│   │   ├── file_mon.py     # 文件监控
+│   │   ├── network_mon.py  # 网络监控
+│   │   ├── registry_mon.py # 注册表监控
+│   │   ├── audit_mon.py    # 审计监控
+│   │   └── asset_mon.py    # 资产清点
+│   ├── routes/             # API 路由
+│   │   ├── auth.py         # 认证路由
+│   │   ├── monitor.py      # 监控路由
+│   │   ├── logs.py         # 日志路由
+│   │   ├── admin.py        # 管理路由
+│   │   ├── user_requests.py # 用户请求路由
+│   │   ├── auth_utils.py   # 认证工具
+│   │   └── system.py       # 系统路由
+│   └── utils/              # 工具函数
+│       └── security.py      # 安全工具
+├── web/                    # 前端页面
+│   ├── login.html          # 登录页面
+│   ├── register.html        # 注册页面
+│   ├── menu.html           # 菜单页面
+│   ├── dashboard.html      # 监控仪表盘
+│   ├── logs.html          # 日志查看
+│   ├── admin.html         # 管理面板
+│   ├── profile.html       # 个人中心
+│   ├── css/
+│   │   └── style.css       # 样式文件
+│   └── js/
+│       ├── auth.js         # 认证脚本
+│       ├── menu.js         # 菜单脚本
+│       ├── dashboard.js    # 仪表盘脚本
+│       ├── logs.js         # 日志脚本
+│       ├── admin.js        # 管理脚本
+│       └── profile.js      # 个人中心脚本
+├── requirements.txt        # Python 依赖
+└── README.md               # 本文件
 ```
 
-> 说明：`pywin32` 提供 Windows 原生 API 与 WMI 支持，`watchdog` 用于文件系统监听，`plyer` 提供桌面通知能力。
+## 快速开始
 
-## 启动程序
+### 1. 安装依赖
 
-```powershell （以管理员身份运行）
-python main.py
+```bash
+pip install -r requirements.txt
 ```
 
-## 使用说明
+### 2. 配置数据库
 
-- `开始`：启动所有监控模块
-- `暂停`：停止监控并输出本次检测结果摘要
-- `退出`：终止监控并关闭程序
+修改 `src/config.py` 中的 MySQL 配置：
 
-## 输出结果
+```python
+DB_HOST = "localhost"
+DB_PORT = 3306
+DB_USER = "root"
+DB_PASSWORD = "your_password"
+DB_NAME = "winmonitor"
+```
 
-暂停后，界面会显示：
+### 3. 创建数据库
 
-- 进程可疑事件
-- 文件变化与完整性告警
-- 网络异常与攻击事件
-- 注册表变更记录
-- 审计异常日志
-- 当前资产清点摘要
+```sql
+CREATE DATABASE winmonitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
 
-程序还会将日志写入 `winmonitor.log`，并以轮转方式保留历史记录。
+### 4. 启动服务
 
-## 依赖列表
+```bash
+cd src
+python app.py
+```
 
-- `pywin32`
-- `watchdog`
-- `plyer`
+### 5. 访问应用
+
+打开浏览器访问：http://localhost:5000
+
+默认管理员账号：`admin` / `admin123`
+
+## 功能模块
+
+### 用户认证
+
+- 用户注册与登录
+- 密码修改
+- 忘记密码申请
+- 管理员审批
+
+### 监控功能
+
+- **进程监控**：检测可疑启动路径、命令行参数、父进程、资源异常
+- **文件监控**：监听文件创建、修改、删除，检测系统文件完整性
+- **网络监控**：检测外部高危端口连接、可疑网络行为
+- **注册表监控**：监控启动项和服务注册表变更
+- **审计监控**：分析系统审计日志中的安全事件
+- **资产清点**：收集主机信息、内存、磁盘、网络适配器
+
+### 日志管理
+
+- 监控日志分类展示（进程、文件、网络、注册表、审计）
+- 用户变更日志记录
+- 日志级别筛选（信息、警告、严重）
+- 管理员可查看所有日志，普通用户仅查看自己的监控日志
+
+### 告警功能
+
+- 严重告警实时推送（SSE）
+- 告警音效提示
+- 浏览器桌面通知
+
+### 管理功能
+
+- 用户管理（注册审批）
+- 密码重置审批
+- 审计日志查看
+
+## API 路由
+
+### 认证相关
+
+| 方法 | 路由 | 说明 |
+|-----|-----|-----|
+| POST | /api/login | 用户登录 |
+| POST | /api/register | 用户注册 |
+| POST | /api/logout | 用户登出 |
+| PUT | /api/password | 修改密码 |
+| POST | /api/forgot-password | 忘记密码申请 |
+
+### 监控相关
+
+| 方法 | 路由 | 说明 |
+|-----|-----|-----|
+| POST | /api/monitor/start | 启动监控 |
+| POST | /api/monitor/stop | 停止监控 |
+| POST | /api/monitor/pause | 暂停监控 |
+| GET | /api/monitor/status | 获取监控状态 |
+| GET | /api/monitor/processes | 获取进程信息 |
+| GET | /api/monitor/critical-alerts | 获取严重告警 |
+| GET | /api/monitor/stream-alerts | SSE 实时告警流 |
+
+### 日志相关
+
+| 方法 | 路由 | 说明 |
+|-----|-----|-----|
+| GET | /api/logs | 获取日志列表 |
+| GET | /api/logs/summary | 获取日志统计 |
+
+### 管理相关
+
+| 方法 | 路由 | 说明 |
+|-----|-----|-----|
+| GET | /api/admin/users | 获取用户列表 |
+| PUT | /api/admin/users/{id}/approve | 审批用户 |
+| GET | /api/admin/requests | 获取请求列表 |
+| PUT | /api/admin/requests/{id} | 处理请求 |
+| GET | /api/admin/stats | 获取统计数据 |
+
+### 用户请求相关
+
+| 方法 | 路由 | 说明 |
+|-----|-----|-----|
+| GET | /api/user-requests | 获取用户请求状态 |
+
+## 权限说明
+
+| 功能 | 普通用户 | 管理员 |
+|-----|---------|--------|
+| 启动/停止监控 | ✓ | ✓ |
+| 查看自己的监控日志 | ✓ | ✓ |
+| 查看所有监控日志 | ✗ | ✓ |
+| 查看用户变更日志 | ✗ | ✓ |
+| 审批用户注册 | ✗ | ✓ |
+| 审批密码重置 | ✗ | ✓ |
+| 管理用户 | ✗ | ✓ |
+
+## 技术栈
+
+- **后端**：Flask, Flask-Cors, PyMySQL, pywin32, watchdog
+- **前端**：原生 HTML, CSS, JavaScript
+- **数据库**：MySQL
 
 ## 注意事项
 
-- 需要在 Windows 环境运行，目前暂未完成 Linux 系统的拓展适配
-- 运行时应具有足够的权限，否则可能无法读取全部审计日志或终止进程
-- 目前监控逻辑面向 Windows 系统，不支持跨平台
+1. 运行时需要管理员权限，否则可能无法读取全部审计日志
+2. 监控模块使用 Windows 原生 API，需要在 Windows 平台运行
+3. 首次运行会自动初始化数据库表结构
+4. 日志数据存储在 MySQL 数据库中
