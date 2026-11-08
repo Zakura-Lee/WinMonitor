@@ -123,6 +123,15 @@ class EVENT_TRACE_PROPERTIES(ctypes.Structure):
 
 
 class EVENT_TRACE_HEADER(ctypes.Structure):
+    """EVENT_TRACE_HEADER，大小 48 字节。
+
+    末尾是一个 8 字节联合体，三个候选成员共用同一块空间：
+        struct { ULONG KernelTime; ULONG UserTime; }
+        ULONG64 ProcessorTime
+        struct { ULONG ClientContext; ULONG Flags; }
+    这里按其中任一成员展开即可，切勿拆成两个独立字段（会多出 8 字节）。
+    """
+
     _fields_ = [
         ("Size", wintypes.USHORT),
         ("FieldTypeFlags", wintypes.USHORT),
@@ -132,8 +141,6 @@ class EVENT_TRACE_HEADER(ctypes.Structure):
         ("TimeStamp", ctypes.c_longlong),
         ("Guid", GUID),
         ("ProcessorTime", ctypes.c_ulonglong),
-        ("ClientContext", wintypes.ULONG),
-        ("Flags", wintypes.ULONG),
     ]
 
 

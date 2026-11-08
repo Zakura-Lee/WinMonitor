@@ -25,7 +25,10 @@ def test_basic_sizes():
 
 
 def test_event_trace_sizes():
-    assert ctypes.sizeof(types.EVENT_TRACE_HEADER) == 56
+    # EVENT_TRACE_HEADER 末尾是一个 8 字节联合体，总长 48。
+    # 早期实现误拆成两个字段（56 字节），导致 EVENT_TRACE_LOGFILEW 里
+    # EventRecordCallback 偏移错位 8 字节，ETW 永远读不到回调。
+    assert ctypes.sizeof(types.EVENT_TRACE_HEADER) == 48
     assert ctypes.sizeof(types.EVENT_DESCRIPTOR) == 16
     assert ctypes.sizeof(types.EVENT_HEADER) == 80
     assert ctypes.sizeof(types.ETW_BUFFER_CONTEXT) == 4
@@ -36,8 +39,8 @@ def test_logfile_header_sizes():
     assert ctypes.sizeof(types.SYSTEMTIME) == 16
     assert ctypes.sizeof(types.TIME_ZONE_INFORMATION) == 172
     assert ctypes.sizeof(types.TRACE_LOGFILE_HEADER) == 280
-    assert ctypes.sizeof(types.EVENT_TRACE) == 96
-    assert ctypes.sizeof(types.EVENT_TRACE_LOGFILEW) == 456
+    assert ctypes.sizeof(types.EVENT_TRACE) == 88
+    assert ctypes.sizeof(types.EVENT_TRACE_LOGFILEW) == 448
 
 
 def test_event_record_offsets():
@@ -50,9 +53,12 @@ def test_event_record_offsets():
 def test_logfile_offsets():
     assert types.EVENT_TRACE_LOGFILEW.LoggerName.offset == 8
     assert types.EVENT_TRACE_LOGFILEW.ProcessTraceMode.offset == 28
-    assert types.EVENT_TRACE_LOGFILEW.BufferCallback.offset == 408
-    assert types.EVENT_TRACE_LOGFILEW.EventsLost.offset == 424
-    assert types.EVENT_TRACE_LOGFILEW.EventRecordCallback.offset == 432
+    assert types.EVENT_TRACE_LOGFILEW.CurrentEvent.offset == 32
+    assert types.EVENT_TRACE_LOGFILEW.LogfileHeader.offset == 120
+    assert types.EVENT_TRACE_LOGFILEW.BufferCallback.offset == 400
+    assert types.EVENT_TRACE_LOGFILEW.EventsLost.offset == 416
+    assert types.EVENT_TRACE_LOGFILEW.EventRecordCallback.offset == 424
+    assert types.EVENT_TRACE_LOGFILEW.Context.offset == 440
 
 
 def test_guid_parse_and_format():

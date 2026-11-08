@@ -8,16 +8,12 @@ set PYTHONIOENCODING=utf-8
 
 (
   echo ==========================================================
-  echo ETW diagnostic round 9: mirroring the reference implementation
+  echo ETW diagnostic round 10: struct layout fixed
   echo ==========================================================
   echo.
 
-  echo === A. our spike, properties mirrored from pywintrace ===
-  ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 6 --level 5
-  echo.
-
-  echo === B. same but without buffer callback ===
-  ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 6 --level 5 --no-buffer-cb
+  echo === our spike after fixing EVENT_TRACE_HEADER ===
+  ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 6 --level 5 --raw
   echo.
 
   echo === done ===
