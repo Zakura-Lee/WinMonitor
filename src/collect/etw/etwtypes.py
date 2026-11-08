@@ -271,30 +271,31 @@ class EVENT_TRACE(ctypes.Structure):
     ]
 
 
-# 回调类型必须先于 EVENT_TRACE_LOGFILEW 定义
-EVENT_RECORD_CALLBACK = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.POINTER(EVENT_RECORD))
-
-
+# 回调类型需要引用 EVENT_TRACE_LOGFILEW，先做前向声明再填字段
 class EVENT_TRACE_LOGFILEW(ctypes.Structure):
-    _fields_ = [
-        ("LogFileName", ctypes.c_wchar_p),
-        ("LoggerName", ctypes.c_wchar_p),
-        ("CurrentTime", ctypes.c_longlong),
-        ("BuffersRead", wintypes.ULONG),
-        ("ProcessTraceMode", wintypes.ULONG),
-        ("CurrentEvent", EVENT_TRACE),
-        ("LogfileHeader", TRACE_LOGFILE_HEADER),
-        ("BufferCallback", ctypes.c_void_p),
-        ("BufferSize", wintypes.ULONG),
-        ("Filled", wintypes.ULONG),
-        ("EventsLost", wintypes.ULONG),
-        ("EventRecordCallback", ctypes.c_void_p),
-        ("IsKernelTrace", wintypes.ULONG),
-        ("Context", ctypes.c_void_p),
-    ]
+    pass
 
 
-# 缓冲区回调：返回非 0 表示继续处理，0 表示停止
+# 事件回调返回 void（SDK: VOID (WINAPI*)(PEVENT_RECORD)）
+# 缓冲区回调返回 ULONG，非 0 表示继续处理
+EVENT_RECORD_CALLBACK = ctypes.WINFUNCTYPE(None, ctypes.POINTER(EVENT_RECORD))
 EVENT_TRACE_BUFFER_CALLBACKW = ctypes.WINFUNCTYPE(
     wintypes.ULONG, ctypes.POINTER(EVENT_TRACE_LOGFILEW)
 )
+
+EVENT_TRACE_LOGFILEW._fields_ = [
+    ("LogFileName", ctypes.c_wchar_p),
+    ("LoggerName", ctypes.c_wchar_p),
+    ("CurrentTime", ctypes.c_longlong),
+    ("BuffersRead", wintypes.ULONG),
+    ("ProcessTraceMode", wintypes.ULONG),
+    ("CurrentEvent", EVENT_TRACE),
+    ("LogfileHeader", TRACE_LOGFILE_HEADER),
+    ("BufferCallback", EVENT_TRACE_BUFFER_CALLBACKW),
+    ("BufferSize", wintypes.ULONG),
+    ("Filled", wintypes.ULONG),
+    ("EventsLost", wintypes.ULONG),
+    ("EventRecordCallback", EVENT_RECORD_CALLBACK),
+    ("IsKernelTrace", wintypes.ULONG),
+    ("Context", ctypes.c_void_p),
+]

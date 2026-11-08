@@ -192,7 +192,7 @@ def _on_event(record_pointer):
             state.samples.append(describe(record, state.want_raw))
     except Exception:  # noqa: BLE001
         state.decode_errors += 1
-    return 0
+    return None
 
 
 CALLBACK = types.EVENT_RECORD_CALLBACK(_on_event)
@@ -380,16 +380,18 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
         logfile.LoggerName = "WinMonitorSpikeNotExist" if bogus else session_name
         if legacy:
             logfile.ProcessTraceMode = types.PROCESS_TRACE_MODE_REAL_TIME
-            logfile.EventRecordCallback = ctypes.cast(LEGACY_CALLBACK, ctypes.c_void_p)
+            logfile.EventRecordCallback = types.EVENT_RECORD_CALLBACK(
+                ctypes.cast(LEGACY_CALLBACK, ctypes.c_void_p).value
+            )
         else:
             logfile.ProcessTraceMode = (
                 types.PROCESS_TRACE_MODE_REAL_TIME | types.PROCESS_TRACE_MODE_EVENT_RECORD
             )
-            logfile.EventRecordCallback = ctypes.cast(CALLBACK, ctypes.c_void_p)
-        logfile.BufferCallback = ctypes.cast(BUFFER_CALLBACK, ctypes.c_void_p)
+            logfile.EventRecordCallback = CALLBACK
+        logfile.BufferCallback = BUFFER_CALLBACK
         logfile.Context = None
 
-        consumer = api.OpenTraceW(ctypes.pointer(logfile))
+        consumer = types.TRACEHANDLE(api.OpenTraceW(ctypes.pointer(logfile)))
         if consumer == types.INVALID_PROCESSTRACE_HANDLE:
             error = api.last_error()
             print(f"[FAIL] OpenTraceW 失败，错误码 {error} ({ctypes.FormatError(error).strip()})")
@@ -404,12 +406,12 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
         print(f"  消费者句柄                       : 0x{consumer:016X}")
         print()
 
-        handles = (types.TRACEHANDLE * 1)(consumer)
+        trace_handle = types.TRACEHANDLE(consumer)
         trace_result = {"rc": None, "start": 0.0, "end": 0.0}
 
         def _consume():
             trace_result["start"] = time.perf_counter()
-            trace_result["rc"] = api.ProcessTrace(handles, 1, None, None)
+            trace_result["rc"] = api.ProcessTrace(ctypes.byref(trace_handle), 1, None, None)
             trace_result["end"] = time.perf_counter()
 
         worker = threading.Thread(target=_consume, daemon=True)
