@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-交叉验证探针：用 pywintrace 这个成熟的 ctypes 绑定跑同样的场景。
+交叉验证探针：用 pywintrace 的底层类跑同样的场景。
 
-目的只有一个：把「我们的实现有 bug」和「这台机器实时消费不可用」
-两种情况区分开。不进入正式代码路径。
+绕开 pywintrace 的 ETW 包装层，因为它在 Python 3.15 上会把会话句柄
+当成字符串传给 byref()；直接使用 EventProvider + EventConsumer，
+这正是它的 ETW.start() 内部做的事。
 
 用法（需管理员权限）:
     python scripts/etw_ref_probe.py
 """
 
-import os
 import subprocess
 import sys
 import threading
 import time
+import uuid
 
 PROVIDER_NAME = "Microsoft-Windows-Kernel-Process"
 PROVIDER_GUID = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
+# 每次用唯一会话名，避免上次异常退出残留的同名会话导致 ERROR_ALREADY_EXISTS
+SESSION_NAME = "WinMonitorRef_" + uuid.uuid4().hex[:8]
 
 STATE = {"count": 0, "samples": [], "callbacks": 0, "errors": 0}
 
@@ -52,46 +55,48 @@ def _spawn_workload(count=20):
 
 def main():
     try:
-        from etw import ETW, ProviderInfo
+        from etw import ProviderInfo
+        from etw.etw import EventConsumer, EventProvider, TraceProperties
     except ImportError as exc:
         print("[FAIL] 无法导入 pywintrace:", exc)
         return 2
 
     seconds = 6.0
-    provider = ProviderInfo(
-        PROVIDER_NAME, PROVIDER_GUID, level=5, any_keywords=0x70
-    )
+    provider_info = ProviderInfo(PROVIDER_NAME, PROVIDER_GUID, level=5, any_keywords=0x70)
+    properties = TraceProperties(ring_buf_size=64, min_buffers=4, max_buffers=32)
 
     print(f"[REF] 提供者: {PROVIDER_NAME}")
     print(f"[REF] GUID  : {PROVIDER_GUID}")
-    print(f"[REF] 会话  : WinMonitorRef")
+    print(f"[REF] 会话  : {SESSION_NAME}")
     print(f"[REF] 时长  : {seconds}s")
     print()
 
-    session = ETW(
-        session_name="WinMonitorRef",
-        providers=[provider],
-        event_callback=_event_callback,
-        ring_buf_size=64,
-        min_buffers=4,
-        max_buffers=32,
-        ignore_exists_error=True,
-    )
+    provider = EventProvider(SESSION_NAME, properties, [provider_info])
+    consumer = None
 
     try:
-        session.start()
+        provider.start()
     except Exception as exc:  # noqa: BLE001
-        print("[FAIL] 启动失败:", type(exc).__name__, exc)
+        print("[FAIL] 启动会话失败:", type(exc).__name__, exc)
         return 3
 
     try:
+        consumer = EventConsumer(SESSION_NAME, _event_callback)
+        consumer.start()
         _spawn_workload()
         time.sleep(seconds)
+    except Exception as exc:  # noqa: BLE001
+        print("[FAIL] 启动消费者失败:", type(exc).__name__, exc)
     finally:
         try:
-            session.stop()
+            if consumer is not None:
+                consumer.stop()
         except Exception as exc:  # noqa: BLE001
-            print("[WARN] 停止时出错:", exc)
+            print("[WARN] 停止消费者出错:", exc)
+        try:
+            provider.stop()
+        except Exception as exc:  # noqa: BLE001
+            print("[WARN] 停止会话出错:", exc)
 
     print("=" * 50)
     print(f"回调次数   : {STATE['callbacks']}")

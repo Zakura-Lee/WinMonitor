@@ -370,7 +370,7 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
             mode = probe_props.contents.LogFileMode
             expected = types.EVENT_TRACE_REAL_TIME_MODE
             flag = "OK" if (mode & expected) else "未生效"
-            print(f"诊断: 会话 LogFileMode = 0x{mode.value:08X} (期望含 0x{expected:08X}) -> {flag}")
+            print(f"诊断: 会话 LogFileMode = 0x{mode:08X} (期望含 0x{expected:08X}) -> {flag}")
             print(f"      会话 BufferSize  = {probe_props.contents.BufferSize} KB")
         else:
             print(f"诊断: 会话查询失败，错误码 {probe_rc}")
@@ -400,7 +400,7 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
         # OpenTraceW 会回写结构体，读回来可以验证它确实认了我们的配置
         print("诊断: OpenTrace 之后的回写值")
         print(f"  LoggerName 回读                  : {logfile.LoggerName!r}")
-        print(f"  ProcessTraceMode 回读            : 0x{logfile.ProcessTraceMode.value:08X}")
+        print(f"  ProcessTraceMode 回读            : 0x{logfile.ProcessTraceMode:08X}")
         print(f"  LogfileHeader.NumberOfProcessors : {logfile.LogfileHeader.NumberOfProcessors}"
               f" (本机 {os.cpu_count()})")
         print(f"  消费者句柄                       : 0x{consumer.value:016X}")
