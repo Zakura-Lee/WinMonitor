@@ -55,14 +55,21 @@ def _spawn_workload(count=20):
 
 def main():
     try:
-        from etw import ProviderInfo
+        from etw import GUID, ProviderInfo
         from etw.etw import EventConsumer, EventProvider, TraceProperties
     except ImportError as exc:
         print("[FAIL] 无法导入 pywintrace:", exc)
         return 2
 
     seconds = 6.0
-    provider_info = ProviderInfo(PROVIDER_NAME, PROVIDER_GUID, level=5, any_keywords=0x70)
+    # ProviderInfo 需要 GUID 对象而不是字符串，否则 EnableTraceEx2 处 byref 会失败
+    provider_info = ProviderInfo(
+        PROVIDER_NAME,
+        GUID(PROVIDER_GUID),
+        level=5,
+        any_keywords=0x70,
+        all_keywords=0x0,
+    )
     properties = TraceProperties(ring_buf_size=64, min_buffers=4, max_buffers=32)
 
     print(f"[REF] 提供者: {PROVIDER_NAME}")
@@ -77,7 +84,9 @@ def main():
     try:
         provider.start()
     except Exception as exc:  # noqa: BLE001
+        import traceback
         print("[FAIL] 启动会话失败:", type(exc).__name__, exc)
+        traceback.print_exc()
         return 3
 
     try:

@@ -406,7 +406,7 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
         print(f"  消费者句柄                       : 0x{consumer.value:016X}")
         print()
 
-        trace_handle = types.TRACEHANDLE(consumer)
+        trace_handle = consumer
         trace_result = {"rc": None, "start": 0.0, "end": 0.0}
 
         def _consume():
