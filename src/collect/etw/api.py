@@ -77,6 +77,10 @@ def last_error():
     return ctypes.get_last_error()
 
 
+# 与参考实现保持一致：缓冲区按最大字符串长度预留，避免 ETW 回写名字时越界
+MAX_STR_LEN = 1024
+
+
 def build_properties(
     session_name,
     buffer_size_kb=64,
@@ -85,36 +89,40 @@ def build_properties(
     log_file_path=None,
     real_time=True,
 ):
-    """构造 EVENT_TRACE_PROPERTIES 缓冲区（含会话名，可选日志文件名）。
+    """构造 EVENT_TRACE_PROPERTIES 缓冲区。
 
     返回 (buffer, properties_pointer)。缓冲区必须保持存活直到会话结束，
     否则 StartTraceW 会读到已释放的内存。
+
+    注意: 会话名通过 StartTraceW 的 InstanceName 参数传入，
+    这里不再把名字写进缓冲区，只把 Wnode.BufferSize 设成整块大小，
+    与 pywintrace 等成熟实现保持一致。
     """
-    name_bytes = (session_name + "\0").encode("utf-16-le")
-    path_bytes = (log_file_path + "\0").encode("utf-16-le") if log_file_path else b""
     struct_size = ctypes.sizeof(types.EVENT_TRACE_PROPERTIES)
-    total = struct_size + len(name_bytes) + len(path_bytes)
+    total = struct_size + 2 * ctypes.sizeof(ctypes.c_wchar) * MAX_STR_LEN
 
     buffer = ctypes.create_string_buffer(total)
     properties = ctypes.cast(buffer, PEVENT_TRACE_PROPERTIES)
 
-    properties.contents.Wnode.BufferSize = total
-    properties.contents.Wnode.Flags = types.WNODE_FLAG_TRACED_GUID
     properties.contents.BufferSize = buffer_size_kb
-    properties.contents.MinimumBuffers = minimum_buffers
-    properties.contents.MaximumBuffers = maximum_buffers
+    if minimum_buffers:
+        properties.contents.MinimumBuffers = minimum_buffers
+    if maximum_buffers:
+        properties.contents.MaximumBuffers = maximum_buffers
+    properties.contents.Wnode.Flags = types.WNODE_FLAG_TRACED_GUID
     properties.contents.LogFileMode = (
         types.EVENT_TRACE_REAL_TIME_MODE if real_time else types.EVENT_TRACE_FILE_MODE_SEQUENTIAL
     )
-    properties.contents.FlushTimer = 1
+    properties.contents.Wnode.BufferSize = total
     properties.contents.LoggerNameOffset = struct_size
 
-    ctypes.memmove(ctypes.addressof(buffer) + struct_size, name_bytes, len(name_bytes))
-
-    if path_bytes:
-        properties.contents.LogFileNameOffset = struct_size + len(name_bytes)
-        offset = struct_size + len(name_bytes)
-        ctypes.memmove(ctypes.addressof(buffer) + offset, path_bytes, len(path_bytes))
+    if log_file_path:
+        name_bytes = (session_name + "\0").encode("utf-16-le")
+        path_bytes = (log_file_path + "\0").encode("utf-16-le")
+        ctypes.memmove(ctypes.addressof(buffer) + struct_size, name_bytes, len(name_bytes))
+        path_offset = struct_size + len(name_bytes)
+        properties.contents.LogFileNameOffset = path_offset
+        ctypes.memmove(ctypes.addressof(buffer) + path_offset, path_bytes, len(path_bytes))
     else:
         properties.contents.LogFileNameOffset = 0
 

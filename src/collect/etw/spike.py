@@ -296,7 +296,7 @@ def _spawn_workload(count):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def run(provider_name, seconds, max_events, keywords, want_raw, session_name, level=5, etl_path=None, workload=20, legacy=False, bogus=False):
+def run(provider_name, seconds, max_events, keywords, want_raw, session_name, level=5, etl_path=None, workload=20, legacy=False, bogus=False, buffer_cb=True):
     state = SpikeState(max_events=max_events, want_raw=want_raw)
     global _STATE
     _STATE = state
@@ -388,9 +388,9 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
                 types.PROCESS_TRACE_MODE_REAL_TIME | types.PROCESS_TRACE_MODE_EVENT_RECORD
             )
             logfile.EventRecordCallback = CALLBACK
-        logfile.BufferCallback = BUFFER_CALLBACK
+        if buffer_cb:
+            logfile.BufferCallback = BUFFER_CALLBACK
         logfile.Context = None
-
         consumer = types.TRACEHANDLE(api.OpenTraceW(ctypes.pointer(logfile)))
         if consumer == types.INVALID_PROCESSTRACE_HANDLE:
             error = api.last_error()
@@ -625,6 +625,11 @@ def main(argv=None):
         action="store_true",
         help="反证实验：用一个不存在的会话名调用 OpenTraceW，验证它是否真的在校验会话",
     )
+    parser.add_argument(
+        "--no-buffer-cb",
+        action="store_true",
+        help="不注册缓冲区回调，与参考实现保持一致，用于排查回调是否影响投递",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -645,6 +650,7 @@ def main(argv=None):
         workload=args.workload,
         legacy=args.legacy,
         bogus=args.bogus,
+        buffer_cb=not args.no_buffer_cb,
     )
 
 
