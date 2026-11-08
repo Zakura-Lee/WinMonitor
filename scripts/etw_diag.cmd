@@ -8,16 +8,16 @@ set PYTHONIOENCODING=utf-8
 
 (
   echo ==========================================================
-  echo ETW diagnostic round 4: session mode and ProcessTrace blocking
+  echo ETW diagnostic round 5: is OpenTrace actually attaching
   echo ==========================================================
   echo.
 
-  echo === A. EVENT_RECORD ===
+  echo === A. normal session name ===
   ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 5 --level 5
   echo.
 
-  echo === B. legacy ===
-  ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 5 --level 5 --legacy
+  echo === B. bogus session name, should behave differently ===
+  ".venv\Scripts\python.exe" "src\collect\etw\spike.py" --seconds 5 --level 5 --bogus
   echo.
 
   echo === done ===

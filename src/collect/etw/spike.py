@@ -296,7 +296,7 @@ def _spawn_workload(count):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-def run(provider_name, seconds, max_events, keywords, want_raw, session_name, level=5, etl_path=None, workload=20, legacy=False):
+def run(provider_name, seconds, max_events, keywords, want_raw, session_name, level=5, etl_path=None, workload=20, legacy=False, bogus=False):
     state = SpikeState(max_events=max_events, want_raw=want_raw)
     global _STATE
     _STATE = state
@@ -323,6 +323,8 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
     print(f"[INFO] 会话名      : {session_name}")
     print(f"[INFO] Level       : {level}")
     print(f"[INFO] 回调模式    : {'传统 EVENT_TRACE' if legacy else 'EVENT_RECORD'}")
+    if bogus:
+        print("[INFO] 反证模式    : 使用不存在的会话名去 OpenTrace（预期应当失败）")
     print(f"[INFO] 采集时长    : {seconds}s" + (f"，上限 {max_events} 条" if max_events else ""))
     print()
 
@@ -375,7 +377,7 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
         del probe_buffer
 
         logfile = types.EVENT_TRACE_LOGFILEW()
-        logfile.LoggerName = session_name
+        logfile.LoggerName = "WinMonitorSpikeNotExist" if bogus else session_name
         if legacy:
             logfile.ProcessTraceMode = types.PROCESS_TRACE_MODE_REAL_TIME
             logfile.EventRecordCallback = ctypes.cast(LEGACY_CALLBACK, ctypes.c_void_p)
@@ -439,6 +441,8 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
                 "events_lost": query_props.contents.EventsLost,
                 "number_of_buffers": query_props.contents.NumberOfBuffers,
                 "free_buffers": query_props.contents.FreeBuffers,
+                "rt_lost": query_props.contents.RealTimeBuffersLost,
+                "log_lost": query_props.contents.LogBuffersLost,
             }
         del query_buffer
 
@@ -482,6 +486,10 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name, le
               f"会话丢事件: {session_stats['events_lost']}")
         print(f"会话缓冲数        : {session_stats['number_of_buffers']}  "
               f"空闲: {session_stats['free_buffers']}")
+        print(f"实时投递失败      : {session_stats['rt_lost']}  "
+              f"写盘失败: {session_stats['log_lost']}")
+        if session_stats["rt_lost"] > 0:
+            print("  ^ 实时缓冲被丢弃，说明会话认为「没有消费者在收」")
     else:
         print(f"会话统计查询失败  : {query_rc}")
 
@@ -610,6 +618,11 @@ def main(argv=None):
         action="store_true",
         help="改用传统 EVENT_TRACE 回调，用于排查 EVENT_RECORD 路径问题",
     )
+    parser.add_argument(
+        "--bogus",
+        action="store_true",
+        help="反证实验：用一个不存在的会话名调用 OpenTraceW，验证它是否真的在校验会话",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -629,6 +642,7 @@ def main(argv=None):
         etl_path=args.etl or None,
         workload=args.workload,
         legacy=args.legacy,
+        bogus=args.bogus,
     )
 
 
