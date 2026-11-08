@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 模块名: process_mon.py
@@ -18,6 +18,7 @@ import win32process
 from win32com.client import Dispatch
 
 import config
+from utils.paths import matches_prefix
 
 WMI = None
 
@@ -98,7 +99,7 @@ def is_safe_maintenance_process(info):
         return False
     if not is_trusted_parent(info["pname"]):
         return False
-    if any(info["exe_path"].startswith(path) for path in PROCESS_TRUSTED_PATHS):
+    if matches_prefix(info["exe_path"], PROCESS_TRUSTED_PATHS):
         return True
     if info["name"] in {"ngentask.exe", "wuauclt.exe", "trustedinstaller.exe", "tiworker.exe"}:
         return True
@@ -236,15 +237,14 @@ def compute_cpu_percent(pid, cpu_seconds):
 
 
 def is_trusted_path(path):
-    normalized = os.path.abspath(path).lower()
-    return any(normalized.startswith(trusted) for trusted in PROCESS_TRUSTED_PATHS)
+    return matches_prefix(path, PROCESS_TRUSTED_PATHS)
 
 
 def evaluate_suspicion(info):
     score = 0
     reasons = []
 
-    if any(info["exe_path"].startswith(path) for path in SUS_PATH):
+    if matches_prefix(info["exe_path"], SUS_PATH):
         score += PROCESS_PATH_SCORE
         reasons.append("可疑执行路径")
 

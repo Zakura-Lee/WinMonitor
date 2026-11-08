@@ -5,6 +5,8 @@
 功能: 存储 WinMonitor 的配置常量
 """
 
+import os
+
 import win32con
 
 # 日志配置
@@ -14,17 +16,24 @@ LOG_BACKUP_COUNT = 3
 LOG_LEVEL = "INFO"
 
 # 进程监控配置
-SUS_PATH = [
-    r"c:\\users\\admin\\appdata\\local\\temp\\",
-    r"c:\\users\\admin\\desktop\\",
-    r"c:\\users\\admin\\downloads\\",
-    r"c:\\windows\\temp\\",
-]
+# 可疑执行路径按运行环境动态解析，避免写死某个用户名
+_SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
+_USER_PROFILE = os.environ.get("USERPROFILE", "")
 
-SUS_PATH_WHITELIST = [
-    r"c:\\users\\admin\\downloads\\setup.exe",
-    r"c:\\users\\admin\\downloads\\install.exe",
+_TEMP_DIRS = [
+    os.environ.get("TEMP", ""),
+    os.environ.get("TMP", ""),
+    os.path.join(_SYSTEM_ROOT, "Temp"),
 ]
+_USER_DIRS = [os.path.join(_USER_PROFILE, name) for name in ("Desktop", "Downloads")]
+
+SUS_PATH = [path for path in _TEMP_DIRS + _USER_DIRS if path]
+
+SUS_PATH_WHITELIST = (
+    [os.path.join(_USER_PROFILE, "Downloads", name) for name in ("setup.exe", "install.exe")]
+    if _USER_PROFILE
+    else []
+)
 
 SUS_CMD = [
     "-enc",
@@ -98,11 +107,11 @@ SYS_PROCESS_WHITELIST = {
 
 # 完整性检查目标
 INTEGRITY_TARGETS = [
-    r"C:\\Windows\\System32\\cmd.exe",
-    r"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    r"C:\\Windows\\System32\\svchost.exe",
-    r"C:\\Windows\\System32\\services.exe",
-    r"C:\\Windows\\System32\\lsass.exe",
+    os.path.join(_SYSTEM_ROOT, "System32", "cmd.exe"),
+    os.path.join(_SYSTEM_ROOT, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    os.path.join(_SYSTEM_ROOT, "System32", "svchost.exe"),
+    os.path.join(_SYSTEM_ROOT, "System32", "services.exe"),
+    os.path.join(_SYSTEM_ROOT, "System32", "lsass.exe"),
 ]
 
 # 文件监控配置
@@ -131,25 +140,25 @@ DANGEROUS_FILE_EXTENSIONS = {
 }
 
 FILE_MONITOR_TRUSTED_PATHS = {
-    r"c:\\program files\\",
-    r"c:\\program files (x86)\\",
-    r"c:\\windows\\",
-    r"c:\\users\\default\\",
-    r"c:\\programdata\\microsoft\\windows\\store\\",
-    r"c:\\programdata\\microsoft\\windows\\softwaredistribution\\",
-    r"c:\\programdata\\microsoft\\windows\\updates\\",
-    r"c:\\program files\\windowsapps\\",
-    r"c:\\appdata\\local\\packages\\",
-    r"c:\\windows\\microsoft.net\\framework64\\v4.0.30319\\",
-    r"c:\\windows\\microsoft.net\\framework\\",
-    r"d:\\wps office\\",
-    r"c:\\program files (x86)\\microsoft office\\",
+    "c:\\program files\\",
+    "c:\\program files (x86)\\",
+    "c:\\windows\\",
+    "c:\\users\\default\\",
+    "c:\\programdata\\microsoft\\windows\\store\\",
+    "c:\\programdata\\microsoft\\windows\\softwaredistribution\\",
+    "c:\\programdata\\microsoft\\windows\\updates\\",
+    "c:\\program files\\windowsapps\\",
+    "c:\\appdata\\local\\packages\\",
+    "c:\\windows\\microsoft.net\\framework64\\v4.0.30319\\",
+    "c:\\windows\\microsoft.net\\framework\\",
+    "d:\\wps office\\",
+    "c:\\program files (x86)\\microsoft office\\",
 }
 
 FILE_MONITOR_SENSITIVE_PATHS = {
-    r"c:\\users\\",
-    r"c:\\programdata\\",
-    r"c:\\windows\\system32\\",
+    "c:\\users\\",
+    "c:\\programdata\\",
+    "c:\\windows\\system32\\",
 }
 
 IGNORED_FILENAME_PATTERNS = {
@@ -230,12 +239,12 @@ NETWORK_TRUSTED_PROCESS_NAMES = {
     "trustedinstaller.exe",
 }
 NETWORK_TRUSTED_PROCESS_PATHS = {
-    r"c:\\windows\\system32\\",
-    r"c:\\program files\\",
-    r"c:\\program files (x86)\\",
-    r"c:\\program files\\windowsapps\\",
-    r"c:\\programdata\\microsoft\\windows\\store\\",
-    r"c:\\programdata\\microsoft\\windows\\softwaredistribution\\",
+    "c:\\windows\\system32\\",
+    "c:\\program files\\",
+    "c:\\program files (x86)\\",
+    "c:\\program files\\windowsapps\\",
+    "c:\\programdata\\microsoft\\windows\\store\\",
+    "c:\\programdata\\microsoft\\windows\\softwaredistribution\\",
 }
 PROCESS_TRUSTED_PARENT_NAMES = {
     "svchost.exe",

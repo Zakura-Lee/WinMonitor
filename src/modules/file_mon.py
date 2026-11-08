@@ -16,6 +16,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import config
+from utils.paths import matches_prefix, normalize
 
 IGNORE_EXTENSIONS = config.IGNORE_EXTENSIONS
 IGNORE_DIRECTORIES = config.IGNORE_DIRECTORIES
@@ -81,15 +82,13 @@ def is_windows_system_path(path):
 def is_trusted_path(path):
     if not path:
         return False
-    normalized = os.path.abspath(path).lower().replace("/", "\\")
-    return any(normalized.startswith(trusted) for trusted in FILE_MONITOR_TRUSTED_PATHS)
+    return matches_prefix(path, FILE_MONITOR_TRUSTED_PATHS)
 
 
 def is_sensitive_path(path):
     if not path:
         return False
-    normalized = os.path.abspath(path).lower().replace("/", "\\")
-    return any(normalized.startswith(sensitive) for sensitive in FILE_MONITOR_SENSITIVE_PATHS)
+    return matches_prefix(path, FILE_MONITOR_SENSITIVE_PATHS)
 
 
 def _calculate_file_risk(action, path, dest_path, integrity_mismatch):
@@ -176,27 +175,37 @@ def _is_trusted_dotnet_parent():
     return False
 
 
+_SYSTEM_ROOT_DIR = os.environ.get("SystemRoot", r"C:\Windows")
+
+_NET_FRAMEWORK_PATHS = [
+    os.path.join(_SYSTEM_ROOT_DIR, "Microsoft.NET", "Framework64", "v4.0.30319"),
+    os.path.join(_SYSTEM_ROOT_DIR, "Microsoft.NET", "Framework"),
+]
+
+_OFFICE_WPS_PATHS = [
+    r"D:\WPS Office",
+    r"C:\Program Files (x86)\Microsoft Office",
+]
+
+
 def _is_system32_core_dll(path):
     if not path:
         return False
-    normalized = os.path.abspath(path).lower().replace("/", "\\")
-    system_root = os.environ.get("SystemRoot", r"C:\\Windows").lower().replace("/", "\\")
-    system32_root = os.path.join(system_root, "System32").lower().replace("/", "\\")
-    return normalized.startswith(system32_root) and normalized.endswith(".dll")
+    system32_root = normalize(os.path.join(_SYSTEM_ROOT_DIR, "System32"))
+    target = normalize(path)
+    return target.startswith(system32_root + "/") and target.endswith(".dll")
 
 
 def _is_dotnet_framework_path(path):
     if not path:
         return False
-    normalized = os.path.abspath(path).lower().replace("/", "\\")
-    return normalized.startswith(r"c:\\windows\\microsoft.net\\framework64\\v4.0.30319\\") or normalized.startswith(r"c:\\windows\\microsoft.net\\framework\\")
+    return matches_prefix(path, _NET_FRAMEWORK_PATHS)
 
 
 def _is_office_wps_path(path):
     if not path:
         return False
-    normalized = os.path.abspath(path).lower().replace("/", "\\")
-    return normalized.startswith(r"d:\\wps office\\") or normalized.startswith(r"c:\\program files (x86)\\microsoft office\\")
+    return matches_prefix(path, _OFFICE_WPS_PATHS)
 
 
 def _is_trusted_update_parent():

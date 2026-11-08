@@ -19,6 +19,7 @@ from win32com.client import Dispatch
 
 import config
 from modules.process_mon import normalize_text
+from utils.paths import matches_prefix
 
 WMI = None
 WMI_STD = None
@@ -185,7 +186,7 @@ def _is_trusted_process_context(context):
         return True
     if context["parent_name"] in NETWORK_TRUSTED_PROCESS_NAMES:
         return True
-    if any(context["exe_path"].startswith(path) for path in NETWORK_TRUSTED_PROCESS_PATHS):
+    if matches_prefix(context["exe_path"], NETWORK_TRUSTED_PROCESS_PATHS):
         return True
     return False
 
