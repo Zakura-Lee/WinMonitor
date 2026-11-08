@@ -197,6 +197,49 @@ def _on_event(record_pointer):
 
 CALLBACK = types.EVENT_RECORD_CALLBACK(_on_event)
 
+_BUFFER_COUNTER = {"count": 0}
+
+
+def _on_buffer(logfile_pointer):
+    """缓冲区回调：每交付一个缓冲调用一次。返回非 0 表示继续。"""
+    try:
+        _BUFFER_COUNTER["count"] += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return 1
+
+
+BUFFER_CALLBACK = types.EVENT_TRACE_BUFFER_CALLBACKW(_on_buffer)
+
+
+# 传统 EVENT_TRACE 回调（非 EVENT_RECORD 模式的兜底路径）
+_LEGACY_STATE = {"count": 0, "samples": []}
+
+
+def _on_legacy(trace_pointer):
+    try:
+        trace = trace_pointer.contents
+        _LEGACY_STATE["count"] += 1
+        if len(_LEGACY_STATE["samples"]) < 5:
+            header = trace.Header
+            payload = b""
+            if trace.MofData and trace.MofLength:
+                payload = ctypes.string_at(trace.MofData, trace.MofLength)
+            _LEGACY_STATE["samples"].append(
+                {
+                    "time": filetime_to_text(header.TimeStamp),
+                    "pid": header.ProcessId,
+                    "type": header.Version & 0xFF,
+                    "bytes": len(payload),
+                    "strings": extract_wide_strings(payload),
+                }
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+LEGACY_CALLBACK = ctypes.WINFUNCTYPE(None, ctypes.POINTER(types.EVENT_TRACE))(_on_legacy)
+
 
 # ---------------------------------------------------------------------------
 # 提供者解析
@@ -234,10 +277,30 @@ def resolve_provider(provider_name):
 # 主流程
 # ---------------------------------------------------------------------------
 
-def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
+def _spawn_workload(count):
+    """在独立线程里拉起若干短命进程，保证统计窗口内确实有进程事件。"""
+    if count <= 0:
+        return
+
+    def _worker():
+        for _ in range(count):
+            try:
+                subprocess.Popen(
+                    ["cmd", "/c", "exit"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                return
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def run(provider_name, seconds, max_events, keywords, want_raw, session_name, level=5, etl_path=None, workload=20, legacy=False):
     state = SpikeState(max_events=max_events, want_raw=want_raw)
     global _STATE
     _STATE = state
+    _BUFFER_COUNTER["count"] = 0
 
     if not api.IsUserAnAdmin():
         print("[FAIL] 当前进程不是管理员权限。")
@@ -258,8 +321,13 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
         preview = ", ".join(f"0x{value}:{name}" for value, name in provider_keywords[:6])
         print(f"[INFO] 可用关键字  : {preview}")
     print(f"[INFO] 会话名      : {session_name}")
+    print(f"[INFO] Level       : {level}")
+    print(f"[INFO] 回调模式    : {'传统 EVENT_TRACE' if legacy else 'EVENT_RECORD'}")
     print(f"[INFO] 采集时长    : {seconds}s" + (f"，上限 {max_events} 条" if max_events else ""))
     print()
+
+    if etl_path:
+        return _run_to_file(provider_name, guid, keywords, level, etl_path, session_name, seconds, workload)
 
     buffer, properties = api.build_properties(session_name)
     session = types.TRACEHANDLE()
@@ -281,7 +349,7 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
             session,
             ctypes.byref(provider_guid),
             types.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
-            types.TRACE_LEVEL_INFORMATION,
+            level,
             keywords,
             0,
             0,
@@ -291,12 +359,32 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
             print(f"[FAIL] EnableTraceEx2 失败，错误码 {rc} ({ctypes.FormatError(rc).strip()})")
             return 5
 
+        # 查询会话真实属性：确认 REAL_TIME 标志真的生效了
+        probe_buffer, probe_props = api.build_properties(session_name)
+        probe_rc = api.ControlTraceW(
+            types.TRACEHANDLE(0), session_name, probe_props, types.EVENT_TRACE_CONTROL_QUERY
+        )
+        if probe_rc == types.ERROR_SUCCESS:
+            mode = probe_props.contents.LogFileMode
+            expected = types.EVENT_TRACE_REAL_TIME_MODE
+            flag = "OK" if (mode & expected) else "未生效"
+            print(f"诊断: 会话 LogFileMode = 0x{mode:08X} (期望含 0x{expected:08X}) -> {flag}")
+            print(f"      会话 BufferSize  = {probe_props.contents.BufferSize} KB")
+        else:
+            print(f"诊断: 会话查询失败，错误码 {probe_rc}")
+        del probe_buffer
+
         logfile = types.EVENT_TRACE_LOGFILEW()
         logfile.LoggerName = session_name
-        logfile.ProcessTraceMode = (
-            types.PROCESS_TRACE_MODE_REAL_TIME | types.PROCESS_TRACE_MODE_EVENT_RECORD
-        )
-        logfile.EventRecordCallback = ctypes.cast(CALLBACK, ctypes.c_void_p)
+        if legacy:
+            logfile.ProcessTraceMode = types.PROCESS_TRACE_MODE_REAL_TIME
+            logfile.EventRecordCallback = ctypes.cast(LEGACY_CALLBACK, ctypes.c_void_p)
+        else:
+            logfile.ProcessTraceMode = (
+                types.PROCESS_TRACE_MODE_REAL_TIME | types.PROCESS_TRACE_MODE_EVENT_RECORD
+            )
+            logfile.EventRecordCallback = ctypes.cast(CALLBACK, ctypes.c_void_p)
+        logfile.BufferCallback = ctypes.cast(BUFFER_CALLBACK, ctypes.c_void_p)
         logfile.Context = None
 
         consumer = api.OpenTraceW(ctypes.pointer(logfile))
@@ -305,13 +393,27 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
             print(f"[FAIL] OpenTraceW 失败，错误码 {error} ({ctypes.FormatError(error).strip()})")
             return 6
 
+        # OpenTraceW 会回写结构体，读回来可以验证它确实认了我们的配置
+        print("诊断: OpenTrace 之后的回写值")
+        print(f"  LoggerName 回读                  : {logfile.LoggerName!r}")
+        print(f"  ProcessTraceMode 回读            : 0x{logfile.ProcessTraceMode:08X}")
+        print(f"  LogfileHeader.NumberOfProcessors : {logfile.LogfileHeader.NumberOfProcessors}"
+              f" (本机 {os.cpu_count()})")
+        print(f"  消费者句柄                       : 0x{consumer:016X}")
+        print()
+
         handles = (types.TRACEHANDLE * 1)(consumer)
-        worker = threading.Thread(
-            target=api.ProcessTrace,
-            args=(handles, 1, None, None),
-            daemon=True,
-        )
+        trace_result = {"rc": None, "start": 0.0, "end": 0.0}
+
+        def _consume():
+            trace_result["start"] = time.perf_counter()
+            trace_result["rc"] = api.ProcessTrace(handles, 1, None, None)
+            trace_result["end"] = time.perf_counter()
+
+        worker = threading.Thread(target=_consume, daemon=True)
         worker.start()
+
+        _spawn_workload(workload)
 
         last_report = started
         while True:
@@ -324,6 +426,21 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
             if elapsed - last_report >= 2.0:
                 last_report = elapsed
                 print(f"        ... 已采集 {state.count} 条 / {elapsed:.1f}s")
+
+        # 停止前先查一次会话统计，能区分「没产生事件」和「产生了但没送到消费者」
+        query_buffer, query_props = api.build_properties(session_name)
+        query_rc = api.ControlTraceW(
+            types.TRACEHANDLE(0), session_name, query_props, types.EVENT_TRACE_CONTROL_QUERY
+        )
+        session_stats = {}
+        if query_rc == types.ERROR_SUCCESS:
+            session_stats = {
+                "buffers_written": query_props.contents.BuffersWritten,
+                "events_lost": query_props.contents.EventsLost,
+                "number_of_buffers": query_props.contents.NumberOfBuffers,
+                "free_buffers": query_props.contents.FreeBuffers,
+            }
+        del query_buffer
 
         api.CloseTrace(consumer)
         worker.join(timeout=10)
@@ -339,12 +456,34 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
     print("结果汇总")
     print("=" * 62)
     print(f"采集条数        : {state.count}")
+    if legacy:
+        print(f"传统回调条数    : {_LEGACY_STATE['count']}")
     print(f"实际耗时        : {elapsed:.2f}s")
     rate = state.count / elapsed if elapsed > 0 else 0.0
     print(f"事件速率        : {rate:.0f} 条/秒")
     print(f"会话侧丢事件    : {lost_session}")
     print(f"消费侧丢事件    : {lost_logfile}")
     print(f"解码异常        : {state.decode_errors}")
+
+    print()
+    print("诊断信息")
+    print("-" * 62)
+    trace_seconds = 0.0
+    if trace_result["start"] and trace_result["end"]:
+        trace_seconds = trace_result["end"] - trace_result["start"]
+
+    print(f"ProcessTrace 返回 : {trace_result['rc']}  （阻塞 {trace_seconds:.3f}s）")
+    if trace_result["rc"] == 0 and trace_seconds < 0.5:
+        print("  ^ 说明 ProcessTrace 立刻返回了，消费者没有进入实时等待状态")
+    print(f"缓冲区回调次数    : {_BUFFER_COUNTER['count']}")
+    print(f"消费者已读缓冲    : {logfile.BuffersRead}   已填充: {logfile.Filled}")
+    if session_stats:
+        print(f"会话写盘缓冲      : {session_stats['buffers_written']}  "
+              f"会话丢事件: {session_stats['events_lost']}")
+        print(f"会话缓冲数        : {session_stats['number_of_buffers']}  "
+              f"空闲: {session_stats['free_buffers']}")
+    else:
+        print(f"会话统计查询失败  : {query_rc}")
 
     if state.event_ids:
         print("事件 ID 分布    :")
@@ -378,6 +517,69 @@ def run(provider_name, seconds, max_events, keywords, want_raw, session_name):
     return 0 if state.count > 0 else 7
 
 
+def _run_to_file(provider_name, guid, keywords, level, etl_path, session_name, seconds, workload=20):
+    """写 ETL 文件模式：不挂消费者，用来单独验证会话与提供者配置。"""
+    absolute = os.path.abspath(etl_path)
+    parent = os.path.dirname(absolute)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if os.path.exists(absolute):
+        os.remove(absolute)
+
+    print("[INFO] 模式        : 写 ETL 文件（不挂消费者）")
+    print(f"[INFO] 目标文件    : {absolute}")
+    print()
+
+    buffer, properties = api.build_properties(session_name, log_file_path=absolute, real_time=False)
+    session = types.TRACEHANDLE()
+
+    rc = api.StartTraceW(ctypes.byref(session), session_name, properties)
+    if rc == types.ERROR_ALREADY_EXISTS:
+        api.ControlTraceW(types.TRACEHANDLE(0), session_name, properties, types.EVENT_TRACE_CONTROL_STOP)
+        rc = api.StartTraceW(ctypes.byref(session), session_name, properties)
+    if rc != types.ERROR_SUCCESS:
+        print(f"[FAIL] StartTraceW 失败，错误码 {rc} ({ctypes.FormatError(rc).strip()})")
+        return 4
+
+    try:
+        provider_guid = types.guid_from_string(guid)
+        rc = api.EnableTraceEx2(
+            session,
+            ctypes.byref(provider_guid),
+            types.EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+            level,
+            keywords,
+            0,
+            0,
+            None,
+        )
+        if rc != types.ERROR_SUCCESS:
+            print(f"[FAIL] EnableTraceEx2 失败，错误码 {rc} ({ctypes.FormatError(rc).strip()})")
+            return 5
+        print(f"       采集 {seconds}s ...")
+        _spawn_workload(workload)
+        time.sleep(seconds)
+    finally:
+        api.ControlTraceW(types.TRACEHANDLE(0), session_name, properties, types.EVENT_TRACE_CONTROL_STOP)
+
+    size = os.path.getsize(absolute) if os.path.exists(absolute) else 0
+    written = properties.contents.BuffersWritten
+    lost = properties.contents.EventsLost
+
+    print()
+    print("=" * 62)
+    print(f"ETL 大小        : {size} 字节")
+    print(f"会话写盘缓冲    : {written}")
+    print(f"会话丢事件      : {lost}")
+    print()
+    if size > 0:
+        print("结论: 会话配置与提供者启用正常，事件能进会话。")
+        print("      问题在消费者一侧（OpenTrace / ProcessTrace / 回调）。")
+    else:
+        print("结论: 会话侧没有产生任何事件，问题在会话配置或 Level/Keyword 过滤。")
+    return 0 if size > 0 else 7
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="ETW 可行性验证 spike")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, help="ETW 提供者名称")
@@ -386,6 +588,28 @@ def main(argv=None):
     parser.add_argument("--keywords", default="0x70", help="匹配任一关键字（十六进制，默认进程/线程/映像）")
     parser.add_argument("--raw", action="store_true", help="额外打印载荷前 120 字节")
     parser.add_argument("--session", default="WinMonitorSpike", help="ETW 会话名")
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=5,
+        help="事件级别门限，4=信息 5=详细（默认 5，与 logman 对照组保持一致）",
+    )
+    parser.add_argument(
+        "--etl",
+        default="",
+        help="改为写 ETL 文件模式，不挂消费者，用于隔离验证会话配置",
+    )
+    parser.add_argument(
+        "--workload",
+        type=int,
+        default=20,
+        help="采集期间拉起的短命进程数量，保证窗口内有事件（默认 20）",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="改用传统 EVENT_TRACE 回调，用于排查 EVENT_RECORD 路径问题",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -401,6 +625,10 @@ def main(argv=None):
         keywords=keyword_bits,
         want_raw=args.raw,
         session_name=args.session,
+        level=args.level,
+        etl_path=args.etl or None,
+        workload=args.workload,
+        legacy=args.legacy,
     )
 
 

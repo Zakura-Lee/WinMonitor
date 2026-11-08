@@ -77,15 +77,23 @@ def last_error():
     return ctypes.get_last_error()
 
 
-def build_properties(session_name, buffer_size_kb=64, minimum_buffers=4, maximum_buffers=32):
-    """构造 EVENT_TRACE_PROPERTIES 缓冲区（含会话名）。
+def build_properties(
+    session_name,
+    buffer_size_kb=64,
+    minimum_buffers=4,
+    maximum_buffers=32,
+    log_file_path=None,
+    real_time=True,
+):
+    """构造 EVENT_TRACE_PROPERTIES 缓冲区（含会话名，可选日志文件名）。
 
     返回 (buffer, properties_pointer)。缓冲区必须保持存活直到会话结束，
     否则 StartTraceW 会读到已释放的内存。
     """
     name_bytes = (session_name + "\0").encode("utf-16-le")
+    path_bytes = (log_file_path + "\0").encode("utf-16-le") if log_file_path else b""
     struct_size = ctypes.sizeof(types.EVENT_TRACE_PROPERTIES)
-    total = struct_size + len(name_bytes)
+    total = struct_size + len(name_bytes) + len(path_bytes)
 
     buffer = ctypes.create_string_buffer(total)
     properties = ctypes.cast(buffer, PEVENT_TRACE_PROPERTIES)
@@ -95,10 +103,19 @@ def build_properties(session_name, buffer_size_kb=64, minimum_buffers=4, maximum
     properties.contents.BufferSize = buffer_size_kb
     properties.contents.MinimumBuffers = minimum_buffers
     properties.contents.MaximumBuffers = maximum_buffers
-    properties.contents.LogFileMode = types.EVENT_TRACE_REAL_TIME_MODE
+    properties.contents.LogFileMode = (
+        types.EVENT_TRACE_REAL_TIME_MODE if real_time else types.EVENT_TRACE_FILE_MODE_SEQUENTIAL
+    )
     properties.contents.FlushTimer = 1
     properties.contents.LoggerNameOffset = struct_size
-    properties.contents.LogFileNameOffset = 0
 
     ctypes.memmove(ctypes.addressof(buffer) + struct_size, name_bytes, len(name_bytes))
+
+    if path_bytes:
+        properties.contents.LogFileNameOffset = struct_size + len(name_bytes)
+        offset = struct_size + len(name_bytes)
+        ctypes.memmove(ctypes.addressof(buffer) + offset, path_bytes, len(path_bytes))
+    else:
+        properties.contents.LogFileNameOffset = 0
+
     return buffer, properties
