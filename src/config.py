@@ -5,7 +5,9 @@
 功能: 存储 WinMonitor 的配置常量
 """
 
+import json
 import os
+import secrets
 
 import win32con
 
@@ -362,8 +364,52 @@ ASSET_MON_INTERVAL = 60
 # 后端服务配置
 SERVICE_HOST = "0.0.0.0"
 SERVICE_PORT = 5000
-APP_SECRET_KEY = "replace-with-a-secure-secret"
-JWT_SECRET = "replace-with-a-secure-jwt-secret"
+
+# 应用密钥：优先取环境变量，其次读本地文件，都没有则生成并落盘
+# 落盘位置位于 data/ 下，已在 .gitignore 中排除，不会进入版本库
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SECRET_FILE = os.path.join(_PROJECT_ROOT, "data", "secrets.json")
+
+
+def _load_secrets():
+    """获取 JWT 与 Flask 会话密钥，保证跨重启稳定且不写死在源码里。"""
+    env_jwt = os.environ.get("WINMON_JWT_SECRET", "").strip()
+    env_app = os.environ.get("WINMON_APP_SECRET", "").strip()
+
+    stored = {}
+    try:
+        with open(SECRET_FILE, "r", encoding="utf-8") as handler:
+            stored = json.load(handler) or {}
+    except (OSError, ValueError):
+        stored = {}
+
+    jwt_secret = env_jwt or str(stored.get("jwt_secret", "")).strip()
+    app_secret = env_app or str(stored.get("app_secret", "")).strip()
+
+    generated = False
+    if not jwt_secret:
+        jwt_secret = secrets.token_urlsafe(48)
+        generated = True
+    if not app_secret:
+        app_secret = secrets.token_urlsafe(48)
+        generated = True
+
+    if generated:
+        stored["jwt_secret"] = jwt_secret
+        stored["app_secret"] = app_secret
+        try:
+            os.makedirs(os.path.dirname(SECRET_FILE), exist_ok=True)
+            with open(SECRET_FILE, "w", encoding="utf-8") as handler:
+                json.dump(stored, handler, indent=2)
+            os.chmod(SECRET_FILE, 0o600)
+        except OSError:
+            # 落盘失败时密钥仅在本次进程内有效，不影响启动
+            pass
+
+    return jwt_secret, app_secret
+
+
+JWT_SECRET, APP_SECRET_KEY = _load_secrets()
 
 # MySQL 数据库配置
 DB_HOST = "127.0.0.1"

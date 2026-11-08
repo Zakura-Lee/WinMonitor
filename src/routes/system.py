@@ -3,11 +3,13 @@ import threading
 import time
 from flask import Blueprint, jsonify, request
 from core.monitor import monitor_service
+from routes.auth_utils import admin_required
 
 system_bp = Blueprint("system", __name__)
 
 
 @system_bp.route("/system/exit", methods=["POST"])
+@admin_required
 def exit_system():
     # 先停止监控服务，再尝试关闭 Flask 开发服务器进程
     monitor_service.stop()

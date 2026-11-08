@@ -20,10 +20,27 @@ function logout() {
 }
 
 async function exitSystem() {
+  const token = getAuthToken();
+  if (!token) {
+    showPageMessage("请先登录后再退出系统。");
+    return;
+  }
   try {
-    await fetch(`${apiBase}/system/exit`, { method: "POST" });
+    const response = await fetch(`${apiBase}/system/exit`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json"
+      }
+    });
+    if (response.status === 401 || response.status === 403) {
+      showPageMessage("只有管理员可以退出系统。");
+      return;
+    }
   } catch (err) {
     console.error("退出系统请求失败：", err);
+    showPageMessage("退出系统请求失败，请稍后重试。");
+    return;
   }
   window.open("", "_self");
   window.close();
@@ -100,6 +117,7 @@ async function initPage() {
 
   const exitBtn = document.querySelector("#exitSystemButton");
   if (exitBtn) {
+    exitBtn.style.display = getAdminFlag() ? "" : "none";
     exitBtn.addEventListener("click", exitSystem);
   }
 

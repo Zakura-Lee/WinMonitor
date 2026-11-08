@@ -122,19 +122,6 @@ async function submitRegister(event) {
   }, 1200);
 }
 
-async function exitSystem() {
-  try {
-    await fetch(`${apiBase}/system/exit`, { method: "POST" });
-  } catch (err) {
-    console.error("退出系统请求失败：", err);
-  }
-  window.open("", "_self");
-  window.close();
-  setTimeout(() => {
-    window.location.href = "/closed.html";
-  }, 300);
-}
-
 async function submitForgotPassword() {
   const username = document.querySelector("#username").value.trim();
   const messageEl = document.querySelector("#message");
@@ -172,7 +159,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const loginForm = document.querySelector("#loginForm");
   const registerForm = document.querySelector("#registerForm");
-  const exitButton = document.querySelector("#exitSystemButton");
   const forgotPasswordLink = document.querySelector("#forgotPasswordLink");
 
   if (loginForm) {
@@ -180,9 +166,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   if (registerForm) {
     registerForm.addEventListener("submit", submitRegister);
-  }
-  if (exitButton) {
-    exitButton.addEventListener("click", exitSystem);
   }
   if (forgotPasswordLink) {
     forgotPasswordLink.addEventListener("click", (e) => {

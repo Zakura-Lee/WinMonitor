@@ -10,7 +10,7 @@ monitor_bp = Blueprint("monitor", __name__)
 
 
 @monitor_bp.route("/monitor/start", methods=["POST"])
-@auth_required
+@admin_required
 def start_monitor():
     user = request.user
     username = user.get("username", "system")
@@ -19,14 +19,14 @@ def start_monitor():
 
 
 @monitor_bp.route("/monitor/pause", methods=["POST"])
-@auth_required
+@admin_required
 def pause_monitor():
     monitor_service.pause()
     return jsonify({"success": True, "message": "监控已暂停。", "status": monitor_service.status()})
 
 
 @monitor_bp.route("/monitor/stop", methods=["POST"])
-@auth_required
+@admin_required
 def stop_monitor():
     monitor_service.stop()
     return jsonify({"success": True, "message": "监控已退出。", "status": monitor_service.status()})
