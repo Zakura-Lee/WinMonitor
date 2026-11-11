@@ -9,7 +9,7 @@
 
 import ctypes
 
-from .etw import providers
+from .etw import providers, tdh
 from .model import Event
 
 _DEVICE_CACHE = None
@@ -87,17 +87,44 @@ def _looks_like_path(text):
     return len(text) > 3 and text[1] == ":" and text[2] in "\\/"
 
 
+def _field(fields, *names, default=None):
+    """按不区分大小写的字段名取值，取不到时返回默认值。"""
+    if not fields:
+        return default
+    lowered = {}
+    for key, value in fields.items():
+        if key:
+            lowered.setdefault(key.lower(), value)
+    for name in names:
+        value = lowered.get(name.lower())
+        if value not in (None, ""):
+            return value
+    return default
+
+
 def to_event(raw, provider_names=None):
-    """把 RawEvent 转成 Event。"""
+    """把 RawEvent 转成 Event。
+
+    优先使用 TDH 解析出的结构化字段；布局缺失时退回载荷字符串扫描。
+    """
     names = provider_names if provider_names is not None else providers.GUID_TO_NAME
     provider_name = names.get(raw.provider_id, "")
 
-    strings = extract_wide_strings(raw.payload)
-    image = ""
-    for text in strings:
-        if _looks_like_path(text):
-            image = text
-            break
+    fields = {}
+    if raw.properties:
+        try:
+            fields = tdh.decode_payload(raw.payload, raw.properties)
+        except Exception:  # noqa: BLE001 - 解析失败退回字符串扫描
+            fields = {}
+
+    strings = [] if fields else extract_wide_strings(raw.payload)
+
+    image = _field(fields, "ImageFileName", "ImageName", default="")
+    if not image:
+        for text in strings:
+            if _looks_like_path(text):
+                image = text
+                break
 
     event = Event(
         ts_ns=raw.ts_ns,
@@ -106,18 +133,16 @@ def to_event(raw, provider_names=None):
         event_id=raw.event_id,
         level=raw.level,
         keyword=raw.keyword,
-        pid=raw.pid,
-        tid=raw.tid,
+        # 载荷里的 ProcessId 才是事件主体；事件头的 pid 是「记录事件的进程」
+        pid=_field(fields, "ProcessId", "PID", default=raw.pid),
+        tid=_field(fields, "ThreadId", "TID", default=raw.tid),
+        ppid=_field(fields, "ParentProcessId", "ParentPID", default=0),
+        session_id=_field(fields, "SessionId", default=0),
+        process_key=_field(fields, "ProcessKey", "UniqueProcessKey", default=0),
         image=nt_path_to_dos(image),
         path=nt_path_to_dos(image),
+        cmdline=_field(fields, "CommandLine", default=""),
     )
 
-    # 进程创建事件里，路径之后的第一个非路径宽字符串通常就是命令行
-    if raw.event_id == providers.EVENT_PROCESS_START:
-        for text in strings:
-            if text is not image and not _looks_like_path(text):
-                event.cmdline = text
-                break
-
-    event.extra = {"strings": strings}
+    event.extra = {"fields": fields, "strings": strings}
     return event

@@ -91,13 +91,65 @@ def test_to_event_process_start():
     assert event.pid == 4242
     assert event.tid == 4243
     assert "cmd.exe" in event.image
-    assert event.cmdline == "cmd.exe /c exit"
+    # 没有 TDH 布局时只能扫到路径，命令行需要结构化字段（见 test_to_event_prefers_structured_fields）
+    assert event.cmdline == ""
 
 
 def test_provider_guid_bytes():
     data = providers.guid_bytes(providers.KERNEL_PROCESS.guid)
     assert len(data) == 16
     assert providers.GUID_TO_NAME[data] == "Microsoft-Windows-Kernel-Process"
+
+
+def test_decode_payload_integer_and_string():
+    from collect.etw.tdh import Property, decode_payload
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("ParentProcessId", 8, 0, 0, 0, 0),
+        Property("ImageFileName", 1, 0, 0, 0, 0),
+        Property("CommandLine", 1, 0, 0, 0, 0),
+    )
+    payload = (4242).to_bytes(4, "little") + (1).to_bytes(4, "little")
+    payload += "cmd.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "cmd.exe /c exit".encode("utf-16-le") + b"\x00\x00"
+
+    fields = decode_payload(payload, props)
+    assert fields["ProcessId"] == 4242
+    assert fields["ParentProcessId"] == 1
+    assert fields["ImageFileName"] == "cmd.exe"
+    assert fields["CommandLine"] == "cmd.exe /c exit"
+
+
+def test_to_event_prefers_structured_fields():
+    """有 TDH 布局时，pid 必须取自载荷而不是事件头。"""
+    from collect.etw.tdh import Property
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("ParentProcessId", 8, 0, 0, 0, 0),
+        Property("ImageFileName", 1, 0, 0, 0, 0),
+        Property("CommandLine", 1, 0, 0, 0, 0),
+    )
+    payload = (4242).to_bytes(4, "little") + (1).to_bytes(4, "little")
+    payload += "cmd.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "cmd.exe /c exit".encode("utf-16-le") + b"\x00\x00"
+
+    raw = RawEvent(
+        ts_ns=0,
+        provider_id=providers.guid_bytes(providers.KERNEL_PROCESS.guid),
+        event_id=providers.EVENT_PROCESS_START,
+        level=4,
+        keyword=0x10,
+        pid=9999,  # 事件头里的 pid，应被载荷值覆盖
+        tid=1,
+        payload=payload,
+        properties=props,
+    )
+    event = normalize.to_event(raw)
+    assert event.pid == 4242
+    assert event.ppid == 1
+    assert event.cmdline == "cmd.exe /c exit"
 
 
 def test_session_config_keys_match_api():

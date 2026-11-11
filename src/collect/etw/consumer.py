@@ -13,6 +13,7 @@ import threading
 
 from ..model import FILETIME_EPOCH_DELTA, RawEvent
 from . import api, etwtypes as types
+from .tdh import LayoutCache
 
 
 class EtwConsumerError(RuntimeError):
@@ -32,6 +33,7 @@ class EtwConsumer:
 
         self._record_callback = types.EVENT_RECORD_CALLBACK(self._on_event)
         self._buffer_callback = types.EVENT_TRACE_BUFFER_CALLBACKW(self._on_buffer)
+        self._layouts = LayoutCache()
 
         self.record_count = 0
         self.buffer_count = 0
@@ -103,19 +105,29 @@ class EtwConsumer:
         try:
             record = record_pointer.contents
             header = record.EventHeader
+            descriptor = header.EventDescriptor
             payload = b""
             if record.UserData and record.UserDataLength:
                 payload = ctypes.string_at(record.UserData, record.UserDataLength)
 
+            provider_id = bytes(header.ProviderId)
+            # 布局按事件类型缓存，只有首次会真正调用 TDH
+            event_name, properties = self._layouts.get(
+                record, provider_id, descriptor.Id, descriptor.Version
+            )
+
             raw = RawEvent(
                 ts_ns=(header.TimeStamp - FILETIME_EPOCH_DELTA) * 100,
-                provider_id=bytes(header.ProviderId),
-                event_id=header.EventDescriptor.Id,
-                level=header.EventDescriptor.Level,
-                keyword=header.EventDescriptor.Keyword,
+                provider_id=provider_id,
+                event_id=descriptor.Id,
+                level=descriptor.Level,
+                keyword=descriptor.Keyword,
                 pid=header.ProcessId,
                 tid=header.ThreadId,
                 payload=payload,
+                version=descriptor.Version,
+                event_name=event_name,
+                properties=properties,
             )
             self.record_count += 1
             self._sink(raw)

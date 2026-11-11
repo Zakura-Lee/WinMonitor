@@ -28,6 +28,11 @@ class RawEvent:
     tid: int
     payload: bytes
 
+    # 由 TDH 缓存下来的事件布局，nil 表示该事件没有可用布局
+    version: int = 0
+    event_name: str = ""
+    properties: tuple = ()
+
 
 @dataclass(slots=True)
 class Event:
