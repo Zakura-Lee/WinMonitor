@@ -137,9 +137,10 @@ def to_event(raw, provider_names=None):
         # 载荷中的 ProcessID 只作参考保留在 extra 里，不覆盖此字段
         pid=raw.pid,
         tid=raw.tid,
-        ppid=_field(fields, "ParentProcessId", "ParentProcessID", default=0),
-        session_id=_field(fields, "SessionId", "SessionID", default=0),
-        process_key=_field(fields, "ProcessKey", "UniqueProcessKey", default=0),
+        ppid=_field(fields, "ParentProcessID", "ParentProcessId", default=0),
+        session_id=_field(fields, "SessionID", "SessionId", default=0),
+        # Kernel-Process 没有 UniqueProcessKey，用序号作 PID 复用的判别键
+        process_key=_field(fields, "ProcessSequenceNumber", "ProcessKey", default=0),
         image=nt_path_to_dos(image),
         path=nt_path_to_dos(image),
         cmdline=_field(fields, "CommandLine", default=""),

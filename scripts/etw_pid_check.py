@@ -102,8 +102,17 @@ def main():
             )
             print(
                 f"        cmdline={_get(fields, 'CommandLine')!r} "
-                f"key={_get(fields, 'ProcessKey', 'UniqueProcessKey', 'Key')}"
+                f"key={_get(fields, 'ProcessSequenceNumber')}"
             )
+
+        # 抓一条 ImageName 解不出来或 pid 重复得可疑的事件，把字段全打出来
+        empty_image = [e for e in events if not e.image]
+        if empty_image:
+            sample = empty_image[0]
+            print()
+            print(f"[诊断] 解析不到 ImageName 的事件 pid={sample.pid}，全部字段:")
+            for key, value in sorted((sample.extra.get("fields") or {}).items()):
+                print(f"    {key} = {value!r}")
 
     print()
     if len(real & set(from_header)) >= len(real):
