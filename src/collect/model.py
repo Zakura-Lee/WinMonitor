@@ -71,6 +71,7 @@ class Event:
     proto: str = ""
 
     user: str = ""
+    integrity: str = ""
     session_id: int = 0
 
     lost_before: int = 0

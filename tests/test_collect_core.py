@@ -132,6 +132,7 @@ def test_to_event_sysmon_uses_payload_pid():
         Property("CommandLine", 1, 0, 0, 0, 0),
         Property("ProcessGuid", 1, 0, 0, 0, 0),
         Property("ParentProcessGuid", 1, 0, 0, 0, 0),
+        Property("IntegrityLevel", 1, 0, 0, 0, 0),
     )
     guid = "{11111111-2222-3333-4444-555555555555}"
     parent_guid = "{66666666-7777-8888-9999-000000000000}"
@@ -140,6 +141,7 @@ def test_to_event_sysmon_uses_payload_pid():
     payload += "cmd.exe /c exit".encode("utf-16-le") + b"\x00\x00"
     payload += guid.encode("utf-16-le") + b"\x00\x00"
     payload += parent_guid.encode("utf-16-le") + b"\x00\x00"
+    payload += "High".encode("utf-16-le") + b"\x00\x00"
 
     raw = RawEvent(
         ts_ns=0,
@@ -159,6 +161,7 @@ def test_to_event_sysmon_uses_payload_pid():
     assert event.cmdline == "cmd.exe /c exit"
     assert event.process_guid == guid
     assert event.parent_guid == parent_guid
+    assert event.integrity == "High"
     assert event.image.endswith("cmd.exe")
 
 

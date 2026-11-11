@@ -174,6 +174,7 @@ def to_event(raw, provider_names=None):
         path=nt_path_to_dos(image),
         cmdline=cmdline,
         user=_field(fields, "User", default=""),
+        integrity=_field(fields, "IntegrityLevel", default=""),
     )
 
     event.extra = {"fields": fields, "strings": strings}
