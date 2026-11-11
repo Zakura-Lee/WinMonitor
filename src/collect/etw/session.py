@@ -35,9 +35,10 @@ class EtwSession:
         self._handle = types.TRACEHANDLE(0)
         self._started = False
         self._config = {
+            # 键名必须与 api.build_properties 的形参一致
             "buffer_size_kb": buffer_size_kb,
-            "min_buffers": min_buffers,
-            "max_buffers": max_buffers,
+            "minimum_buffers": min_buffers,
+            "maximum_buffers": max_buffers,
             "log_file_path": log_file_path,
             "real_time": real_time,
         }

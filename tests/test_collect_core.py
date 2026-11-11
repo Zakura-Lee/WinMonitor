@@ -100,6 +100,21 @@ def test_provider_guid_bytes():
     assert providers.GUID_TO_NAME[data] == "Microsoft-Windows-Kernel-Process"
 
 
+def test_session_config_keys_match_api():
+    """EtwSession 的内部配置键必须与 build_properties 的形参一致。
+
+    这条断言是为了避免形参名改动后，构造会话时才在运行期报 TypeError。
+    """
+    from collect.etw import api
+    from collect.etw.session import EtwSession
+
+    session = EtwSession("TestSession")
+    buffer, properties = api.build_properties(session.name, **session._config)
+    assert properties.contents.Wnode.BufferSize > 0
+    assert properties.contents.LoggerNameOffset > 0
+    del buffer
+
+
 def test_collector_importable():
     from collect.collector import EtwCollector
 
