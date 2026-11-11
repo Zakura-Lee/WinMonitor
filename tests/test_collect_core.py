@@ -249,9 +249,11 @@ def test_collector_importable():
     collector = EtwCollector(session_name="TestOnly")
     assert collector.bus is not None
     assert [spec.name for spec in collector.provider_specs] == [
-        "Microsoft-Windows-Kernel-Process"
+        "Microsoft-Windows-Kernel-Process",
+        "Microsoft-Windows-Sysmon",
     ]
     assert collector.stats()["handled"] == 0
+    assert collector.disabled_providers == []
 
 
 if __name__ == "__main__":

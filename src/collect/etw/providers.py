@@ -68,8 +68,9 @@ KERNEL_REGISTRY = ProviderSpec(
     level=5,
 )
 
-# 本阶段只启用进程提供者；文件、网络、注册表在 P6/P7 接入
-DEFAULT_PROVIDERS = (KERNEL_PROCESS,)
+# 进程采集以 Kernel-Process 为骨干，Sysmon 补充命令行与进程 GUID。
+# 未安装 Sysmon 的环境会自动跳过该提供者（见 EtwCollector.start 的容错）。
+DEFAULT_PROVIDERS = (KERNEL_PROCESS, SYSMON)
 
 # --- Sysmon ---------------------------------------------------------------
 # Sysmon 的事件由 Sysmon64.exe 记录，因此 EventHeader.ProcessId 是 Sysmon 自身，

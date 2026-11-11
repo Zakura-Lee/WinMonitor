@@ -45,6 +45,7 @@ class EtwCollector:
         self.decode_errors = 0
         self.handled = 0
         self._consumer_snapshot = None
+        self.disabled_providers = []
 
         self._config = {
             "buffer_size_kb": buffer_size_kb,
@@ -62,7 +63,12 @@ class EtwCollector:
         session = EtwSession(self.session_name, **self._config)
         session.start()
         for spec in self.provider_specs:
-            session.enable(spec)
+            try:
+                session.enable(spec)
+            except Exception as exc:  # noqa: BLE001
+                # 单个提供者不可用不应让整条链路失败，比如机器上没装 Sysmon
+                logger.warning("启用提供者失败，已跳过 %s: %s", spec.name, exc)
+                self.disabled_providers.append(spec.name)
         self._session = session
 
         self._worker = threading.Thread(target=self._decode_loop, daemon=True)
