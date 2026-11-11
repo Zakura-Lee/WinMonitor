@@ -68,10 +68,6 @@ KERNEL_REGISTRY = ProviderSpec(
     level=5,
 )
 
-# 进程采集以 Kernel-Process 为骨干，Sysmon 补充命令行与进程 GUID。
-# 未安装 Sysmon 的环境会自动跳过该提供者（见 EtwCollector.start 的容错）。
-DEFAULT_PROVIDERS = (KERNEL_PROCESS, SYSMON)
-
 # --- Sysmon ---------------------------------------------------------------
 # Sysmon 的事件由 Sysmon64.exe 记录，因此 EventHeader.ProcessId 是 Sysmon 自身，
 # 进程的真实 PID 必须取自载荷里的 ProcessId 字段。
@@ -111,6 +107,10 @@ SYSMON_EVENT_NAMES = {
 SYSMON_CORE_EVENTS = (1, 5)
 
 ALL_PROVIDERS = (KERNEL_PROCESS, KERNEL_FILE, KERNEL_NETWORK, KERNEL_REGISTRY, SYSMON)
+
+# 进程采集以 Kernel-Process 为骨干，Sysmon 补充命令行与进程 GUID。
+# 未安装 Sysmon 的环境会自动跳过该提供者（见 EtwCollector.start 的容错）。
+DEFAULT_PROVIDERS = (KERNEL_PROCESS, SYSMON)
 
 
 def guid_bytes(guid_text):
