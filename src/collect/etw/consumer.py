@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""ETW 实时消费者。
+
+设计约束:
+    OpenTraceW 注册的回调运行在 ProcessTrace 的消费线程上，
+    回调里只做「拷贝」不做「解析」，解析放到业务线程，
+    这样高频事件下不会因为 Python 处理慢而丢缓冲。
+"""
+
+import ctypes
+import threading
+
+from ..model import FILETIME_EPOCH_DELTA, RawEvent
+from . import api, etwtypes as types
+
+
+class EtwConsumerError(RuntimeError):
+    pass
+
+
+class EtwConsumer:
+    def __init__(self, session_name, sink, legacy=False):
+        self.session_name = session_name
+        self._sink = sink
+        self._legacy = legacy
+
+        self._logfile = None
+        self._handle = types.TRACEHANDLE(0)
+        self._thread = None
+        self._started = False
+
+        self._record_callback = types.EVENT_RECORD_CALLBACK(self._on_event)
+        self._buffer_callback = types.EVENT_TRACE_BUFFER_CALLBACKW(self._on_buffer)
+
+        self.record_count = 0
+        self.buffer_count = 0
+        self.error_count = 0
+        self.process_rc = None
+
+    # -- 生命周期 ---------------------------------------------------------
+
+    def start(self):
+        if self._started:
+            return
+
+        logfile = types.EVENT_TRACE_LOGFILEW()
+        logfile.LoggerName = self.session_name
+        if self._legacy:
+            logfile.ProcessTraceMode = types.PROCESS_TRACE_MODE_REAL_TIME
+            logfile.EventRecordCallback = types.EVENT_RECORD_CALLBACK(
+                ctypes.cast(self._record_callback, ctypes.c_void_p).value
+            )
+        else:
+            logfile.ProcessTraceMode = (
+                types.PROCESS_TRACE_MODE_REAL_TIME | types.PROCESS_TRACE_MODE_EVENT_RECORD
+            )
+            logfile.EventRecordCallback = self._record_callback
+        logfile.BufferCallback = self._buffer_callback
+        logfile.Context = None
+
+        self._logfile = logfile
+        handle = api.OpenTraceW(ctypes.pointer(logfile))
+        if handle == types.INVALID_PROCESSTRACE_HANDLE:
+            error = api.last_error()
+            raise EtwConsumerError(
+                f"OpenTraceW 失败: {error} ({ctypes.FormatError(error).strip()})"
+            )
+
+        self._handle = types.TRACEHANDLE(handle)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._started = True
+
+    def stop(self, timeout=5.0):
+        if not self._started:
+            return
+        api.CloseTrace(self._handle)
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+        self._started = False
+        self._thread = None
+        self._logfile = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.stop()
+        return False
+
+    # -- 内部 -------------------------------------------------------------
+
+    def _run(self):
+        self.process_rc = api.ProcessTrace(ctypes.byref(self._handle), 1, None, None)
+
+    def _on_buffer(self, logfile_pointer):
+        self.buffer_count += 1
+        return 1
+
+    def _on_event(self, record_pointer):
+        try:
+            record = record_pointer.contents
+            header = record.EventHeader
+            payload = b""
+            if record.UserData and record.UserDataLength:
+                payload = ctypes.string_at(record.UserData, record.UserDataLength)
+
+            raw = RawEvent(
+                ts_ns=(header.TimeStamp - FILETIME_EPOCH_DELTA) * 100,
+                provider_id=bytes(header.ProviderId),
+                event_id=header.EventDescriptor.Id,
+                level=header.EventDescriptor.Level,
+                keyword=header.EventDescriptor.Keyword,
+                pid=header.ProcessId,
+                tid=header.ThreadId,
+                payload=payload,
+            )
+            self.record_count += 1
+            self._sink(raw)
+        except Exception:  # noqa: BLE001 - 回调里抛异常会污染 ETW 运行时
+            self.error_count += 1
+        return None
