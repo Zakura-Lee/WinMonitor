@@ -10,6 +10,7 @@ ETW 采集器门面
 上层只依赖 on_event 回调，不感知 ETW 细节。
 """
 
+import collections
 import logging
 import threading
 
@@ -46,6 +47,8 @@ class EtwCollector:
         self.handled = 0
         self._consumer_snapshot = None
         self.disabled_providers = []
+        # 按 (提供者, 事件ID) 统计，便于判断「没收到」还是「没产生」
+        self.event_counts = collections.Counter()
 
         self._config = {
             "buffer_size_kb": buffer_size_kb,
@@ -136,6 +139,7 @@ class EtwCollector:
                 self.decode_errors += 1
                 continue
             self.handled += 1
+            self.event_counts[(event.provider, event.event_id)] += 1
             if self._on_event is not None:
                 try:
                     self._on_event(event)
@@ -159,6 +163,11 @@ class EtwCollector:
             }
         elif self._consumer_snapshot is not None:
             result["consumer"] = self._consumer_snapshot
+        if self.event_counts:
+            result["event_counts"] = {
+                f"{provider or 'unknown'}#{event_id}": count
+                for (provider, event_id), count in self.event_counts.most_common(20)
+            }
         if self._session is not None:
             result["session_info"] = self._session.query()
         return result
