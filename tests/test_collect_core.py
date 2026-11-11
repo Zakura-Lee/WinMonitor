@@ -246,6 +246,60 @@ def test_decode_loop_drains_pending():
     assert collector.bus.qsize() == 0
 
 
+def test_classify_network():
+    from collect.detect import classify_network
+
+    attack = Event(ts_ns=0, daddr="8.8.8.8", dport=4444)
+    assert classify_network(attack)[0] == "attack"
+    assert classify_network(attack)[2] == "critical"
+
+    internal = Event(ts_ns=0, daddr="192.168.1.10", dport=4444)
+    assert classify_network(internal)[0] == "normal"
+
+    safe = Event(ts_ns=0, daddr="1.1.1.1", dport=443)
+    assert classify_network(safe)[0] == "normal"
+
+
+def test_to_event_sysmon_network():
+    from collect.etw.tdh import Property
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("Image", 1, 0, 0, 0, 0),
+        Property("Protocol", 1, 0, 0, 0, 0),
+        Property("SourceIp", 1, 0, 0, 0, 0),
+        Property("SourcePort", 6, 0, 0, 0, 0),
+        Property("DestinationIp", 1, 0, 0, 0, 0),
+        Property("DestinationPort", 6, 0, 0, 0, 0),
+    )
+    payload = (1234).to_bytes(4, "little")
+    payload += r"C:\Windows\System32\curl.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "tcp".encode("utf-16-le") + b"\x00\x00"
+    payload += "10.0.0.5".encode("utf-16-le") + b"\x00\x00"
+    payload += (50000).to_bytes(2, "little")
+    payload += "8.8.8.8".encode("utf-16-le") + b"\x00\x00"
+    payload += (4444).to_bytes(2, "little")
+
+    raw = RawEvent(
+        ts_ns=0,
+        provider_id=providers.guid_bytes(providers.SYSMON.guid),
+        event_id=3,
+        level=4,
+        keyword=0,
+        pid=999,  # Sysmon 自身
+        tid=1,
+        payload=payload,
+        properties=props,
+    )
+    event = normalize.to_event(raw)
+    assert event.pid == 1234
+    assert event.proto == "tcp"
+    assert event.saddr == "10.0.0.5"
+    assert event.sport == 50000
+    assert event.daddr == "8.8.8.8"
+    assert event.dport == 4444
+
+
 def test_process_table_parent_chain():
     from collect.proctree import ProcessTable
 

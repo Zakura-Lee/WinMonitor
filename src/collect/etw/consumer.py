@@ -24,6 +24,7 @@ _DECODE_EVENTS = frozenset(
         (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_START),
         (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_STOP),
         (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 1),
+        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 3),
         (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 5),
     }
 )

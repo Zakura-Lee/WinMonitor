@@ -102,6 +102,16 @@ def _field(fields, *names, default=None):
     return default
 
 
+def _to_int(value, default=0):
+    """把 TDH 取回的值转成整数，失败时返回默认值。"""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def to_event(raw, provider_names=None):
     """把 RawEvent 转成 Event。
 
@@ -130,6 +140,11 @@ def to_event(raw, provider_names=None):
     parent_guid = ""
     cmdline = ""
     image = ""
+    saddr = ""
+    daddr = ""
+    sport = 0
+    dport = 0
+    proto = ""
 
     if provider_name == providers.KERNEL_PROCESS.name:
         # 实测对账：事件头 pid 即事件主体（8/8 命中真实 PID）
@@ -145,6 +160,12 @@ def to_event(raw, provider_names=None):
         cmdline = _field(fields, "CommandLine", default="")
         process_guid = _field(fields, "ProcessGuid", default="")
         parent_guid = _field(fields, "ParentProcessGuid", default="")
+        if raw.event_id == 3:  # NetworkConnect
+            saddr = _field(fields, "SourceIp", default="")
+            daddr = _field(fields, "DestinationIp", default="")
+            sport = _to_int(_field(fields, "SourcePort"))
+            dport = _to_int(_field(fields, "DestinationPort"))
+            proto = _field(fields, "Protocol", default="")
     else:
         image = _field(fields, "ImageName", "Image", default="")
         ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
@@ -175,6 +196,11 @@ def to_event(raw, provider_names=None):
         cmdline=cmdline,
         user=_field(fields, "User", default=""),
         integrity=_field(fields, "IntegrityLevel", default=""),
+        saddr=saddr,
+        sport=sport,
+        daddr=daddr,
+        dport=dport,
+        proto=proto,
     )
 
     event.extra = {"fields": fields, "strings": strings}

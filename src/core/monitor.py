@@ -17,6 +17,7 @@ class MonitorService:
         self.running = False
         self.start_time = None
         self.process_data = {"process_changes": []}
+        self.network_events = []
         self.current_user = None
         self.critical_alerts = []
         self.max_critical_alerts = 50
@@ -76,28 +77,28 @@ class MonitorService:
         return True
 
     def _on_etw_event(self, event):
-        """把采集层的 Event 转成 UI 与日志层使用的进程变化记录。"""
+        """把采集层的 Event 分派到进程或网络处理。"""
         is_sysmon = event.provider == "Microsoft-Windows-Sysmon"
 
         if is_sysmon:
-            if event.event_id == 1:
-                action = "started"
-            elif event.event_id == 5:
-                action = "stopped"
-            else:
-                return
             if self.etw_primary != "Microsoft-Windows-Sysmon":
-                return  # 已切换到内核事件，避免重复计数
-        else:
+                return  # 已切换到内核进程事件，避免重复计数
             if event.event_id == 1:
-                action = "started"
-            elif event.event_id == 2:
-                action = "stopped"
-            else:
-                return
-            if self.etw_primary == "Microsoft-Windows-Sysmon":
-                return  # Sysmon 已经报告过同一个进程
+                self._handle_process_event(event, "started")
+            elif event.event_id == 5:
+                self._handle_process_event(event, "stopped")
+            elif event.event_id == 3:
+                self._handle_network_event(event)
+            return
 
+        if self.etw_primary == "Microsoft-Windows-Sysmon":
+            return  # Sysmon 已经报告过同一个进程
+        if event.event_id == 1:
+            self._handle_process_event(event, "started")
+        elif event.event_id == 2:
+            self._handle_process_event(event, "stopped")
+
+    def _handle_process_event(self, event, action):
         if action == "started":
             record = self.process_table.add_start(event)
         else:
@@ -115,7 +116,7 @@ class MonitorService:
             image = event.image
             ppid = event.ppid
             cmdline = event.cmdline
-            parent_key = event.parent_guid and f"guid:{event.parent_guid}" or ""
+            parent_key = f"guid:{event.parent_guid}" if event.parent_guid else ""
 
         parent = self.process_table.get(parent_key) if parent_key else None
         pname = os.path.basename(parent.image).lower() if parent and parent.image else ""
@@ -140,6 +141,43 @@ class MonitorService:
         )
         del changes[200:]
 
+    def _handle_network_event(self, event):
+        from collect.detect import classify_network
+
+        kind, reason, severity = classify_network(event)
+        parent = self.process_table.latest_by_pid(event.ppid) if event.ppid else None
+
+        record = {
+            "time": time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
+            ),
+            "pid": event.pid,
+            "local": f"{event.saddr}:{event.sport}",
+            "remote": f"{event.daddr}:{event.dport}",
+            "status": event.proto or "connect",
+            "type": kind,
+            "reason": reason,
+            "process_name": os.path.basename(event.image).lower() if event.image else "",
+            "process_exe": event.image,
+            "parent_name": os.path.basename(parent.image).lower() if parent and parent.image else "",
+            "blocked": False,
+        }
+        self.network_events.insert(0, record)
+        del self.network_events[500:]
+
+        if kind in ("abnormal", "attack") and severity:
+            try:
+                self.alert_queue.put_nowait(
+                    {
+                        "category": "network",
+                        "title": "网络攻击警报" if kind == "attack" else "网络异常连接",
+                        "message": f"{record['local']} -> {record['remote']} ({reason})",
+                        "severity": severity,
+                    }
+                )
+            except queue.Full:
+                logging.debug("告警队列已满，丢弃网络告警")
+
     def _stop_etw_backend(self):
         if self.etw_collector is None:
             return
@@ -160,6 +198,7 @@ class MonitorService:
         if self.start_time is None:
             self.start_time = time.time()
             self.process_data = {"process_changes": []}
+            self.network_events = []
         self.consumer_thread = threading.Thread(target=self._consume_alerts, daemon=True)
         self.consumer_thread.start()
 
