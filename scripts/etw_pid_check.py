@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PID 语义对账（需管理员权限）
+P4 字段核对（需管理员权限）
 
-目的:
-    验证进程创建事件里的 pid 到底该取事件头还是载荷。
-    做法是记下真实 Popen 出来的 PID，再去和两种取法比交集。
+做三件事:
+    1. 用真实创建的 PID 对账，确认事件头 pid 才是事件主体；
+    2. 打印 ProcessStart 事件的真实属性名，供归一化层对接；
+    3. 检查 ParentProcessID / CommandLine / ProcessKey 是否解出。
 
 用法（管理员）:
     python scripts/etw_pid_check.py
@@ -23,6 +24,18 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from collect.collector import EtwCollector
 from collect.etw import api, providers
+
+
+def _get(fields, *names):
+    """不区分大小写地从字段字典取值。"""
+    if not fields:
+        return None
+    lowered = {str(k).lower(): v for k, v in fields.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def main():
@@ -60,34 +73,43 @@ def main():
 
     real = set(spawned)
     from_header = [event.pid for event in events]
-    # 目前 normalize 优先用载荷字段，这里再看一眼载荷里的原始值
-    from_payload = [
-        (event.extra.get("fields") or {}).get("ProcessId") for event in events
-    ]
+    from_payload = [_get(event.extra.get("fields") or {}, "ProcessID", "ProcessId") for event in events]
 
     print()
-    print("=" * 58)
-    print(f"本次真实创建的 PID   : {sorted(real)}")
-    print(f"ProcessStart 事件数   : {len(events)}")
-    print(f"事件里读取的 pid      : {from_header}")
-    print(f"载荷里的 ProcessId    : {from_payload}")
+    print("=" * 62)
+    print(f"真实创建的 PID      : {sorted(real)}")
+    print(f"ProcessStart 事件数 : {len(events)}")
     print()
-
-    hit_header = len(real & set(from_header))
-    hit_payload = len(real & set(p for p in from_payload if p))
-    print(f"事件头 pid 命中真实 PID 数: {hit_header} / {len(real)}")
-    print(f"载荷 pid 命中真实 PID 数  : {hit_payload} / {len(real)}")
+    print(f"事件头 pid 命中      : {len(real & set(from_header))} / {len(real)}")
+    print(f"载荷 ProcessID 命中  : {len(real & set(p for p in from_payload if p))} / {len(real)}")
     print()
-
     dup = [pid for pid, count in collections.Counter(from_header).items() if count > 1]
-    print(f"事件头 pid 出现重复的值   : {dup}")
+    print(f"事件头 pid 重复值    : {dup}")
 
-    if hit_payload >= hit_header and hit_payload > 0:
-        print("结论: 载荷里的 ProcessId 才是事件主体。")
-    elif hit_header > hit_payload:
-        print("结论: 事件头 pid 更接近真实 PID。")
+    if events:
+        first_fields = events[0].extra.get("fields") or {}
+        print()
+        print("ProcessStart 属性名:")
+        print(f"    {sorted(first_fields.keys())}")
+        print()
+        print("前 3 条进程事件的关键字段:")
+        for event in events[:3]:
+            fields = event.extra.get("fields") or {}
+            print(
+                f"    pid={event.pid} "
+                f"ppid={_get(fields, 'ParentProcessID', 'ParentProcessId')} "
+                f"image={event.image}"
+            )
+            print(
+                f"        cmdline={_get(fields, 'CommandLine')!r} "
+                f"key={_get(fields, 'ProcessKey', 'UniqueProcessKey', 'Key')}"
+            )
+
+    print()
+    if len(real & set(from_header)) >= len(real):
+        print("结论: 事件头 pid 即事件主体，归一化层应直接采用它。")
     else:
-        print("结论: 两组都没命中，需要进一步检查解析正确性。")
+        print("结论: 事件头 pid 未全部命中，需要进一步确认。")
     return 0
 
 

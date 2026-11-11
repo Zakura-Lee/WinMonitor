@@ -133,11 +133,12 @@ def to_event(raw, provider_names=None):
         event_id=raw.event_id,
         level=raw.level,
         keyword=raw.keyword,
-        # 载荷里的 ProcessId 才是事件主体；事件头的 pid 是「记录事件的进程」
-        pid=_field(fields, "ProcessId", "PID", default=raw.pid),
-        tid=_field(fields, "ThreadId", "TID", default=raw.tid),
-        ppid=_field(fields, "ParentProcessId", "ParentPID", default=0),
-        session_id=_field(fields, "SessionId", default=0),
+        # 实测对账结论：事件头里的 pid 就是事件主体（8/8 命中真实 PID），
+        # 载荷中的 ProcessID 只作参考保留在 extra 里，不覆盖此字段
+        pid=raw.pid,
+        tid=raw.tid,
+        ppid=_field(fields, "ParentProcessId", "ParentProcessID", default=0),
+        session_id=_field(fields, "SessionId", "SessionID", default=0),
         process_key=_field(fields, "ProcessKey", "UniqueProcessKey", default=0),
         image=nt_path_to_dos(image),
         path=nt_path_to_dos(image),

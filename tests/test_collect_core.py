@@ -121,13 +121,16 @@ def test_decode_payload_integer_and_string():
     assert fields["CommandLine"] == "cmd.exe /c exit"
 
 
-def test_to_event_prefers_structured_fields():
-    """有 TDH 布局时，pid 必须取自载荷而不是事件头。"""
+def test_to_event_uses_header_pid():
+    """对账结论：事件头的 pid 才是事件主体，载荷字段不覆盖它。
+
+    见 scripts/etw_pid_check.py 的实测输出：事件头 8/8 命中真实 PID。
+    """
     from collect.etw.tdh import Property
 
     props = (
-        Property("ProcessId", 8, 0, 0, 0, 0),
-        Property("ParentProcessId", 8, 0, 0, 0, 0),
+        Property("ProcessID", 8, 0, 0, 0, 0),
+        Property("ParentProcessID", 8, 0, 0, 0, 0),
         Property("ImageFileName", 1, 0, 0, 0, 0),
         Property("CommandLine", 1, 0, 0, 0, 0),
     )
@@ -141,15 +144,16 @@ def test_to_event_prefers_structured_fields():
         event_id=providers.EVENT_PROCESS_START,
         level=4,
         keyword=0x10,
-        pid=9999,  # 事件头里的 pid，应被载荷值覆盖
+        pid=9999,  # 事件头里的 pid，最终采用的就是它
         tid=1,
         payload=payload,
         properties=props,
     )
     event = normalize.to_event(raw)
-    assert event.pid == 4242
+    assert event.pid == 9999
     assert event.ppid == 1
     assert event.cmdline == "cmd.exe /c exit"
+    assert event.extra["fields"]["ProcessID"] == 4242
 
 
 def test_session_config_keys_match_api():
