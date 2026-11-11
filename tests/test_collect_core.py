@@ -121,22 +121,67 @@ def test_decode_payload_integer_and_string():
     assert fields["CommandLine"] == "cmd.exe /c exit"
 
 
+def test_to_event_sysmon_uses_payload_pid():
+    """Sysmon 事件由 Sysmon64.exe 记录，pid 必须取自载荷。"""
+    from collect.etw.tdh import Property
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("ParentProcessId", 8, 0, 0, 0, 0),
+        Property("Image", 1, 0, 0, 0, 0),
+        Property("CommandLine", 1, 0, 0, 0, 0),
+        Property("ProcessGuid", 1, 0, 0, 0, 0),
+        Property("ParentProcessGuid", 1, 0, 0, 0, 0),
+    )
+    guid = "{11111111-2222-3333-4444-555555555555}"
+    parent_guid = "{66666666-7777-8888-9999-000000000000}"
+    payload = (4242).to_bytes(4, "little") + (1).to_bytes(4, "little")
+    payload += r"C:\Windows\System32\cmd.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "cmd.exe /c exit".encode("utf-16-le") + b"\x00\x00"
+    payload += guid.encode("utf-16-le") + b"\x00\x00"
+    payload += parent_guid.encode("utf-16-le") + b"\x00\x00"
+
+    raw = RawEvent(
+        ts_ns=0,
+        provider_id=providers.guid_bytes(providers.SYSMON.guid),
+        event_id=1,
+        level=4,
+        keyword=0,
+        pid=1234,  # Sysmon 自身的 pid
+        tid=1,
+        payload=payload,
+        properties=props,
+    )
+    event = normalize.to_event(raw)
+    assert event.provider == "Microsoft-Windows-Sysmon"
+    assert event.pid == 4242
+    assert event.ppid == 1
+    assert event.cmdline == "cmd.exe /c exit"
+    assert event.process_guid == guid
+    assert event.parent_guid == parent_guid
+    assert event.image.endswith("cmd.exe")
+
+
 def test_to_event_uses_header_pid():
-    """对账结论：事件头的 pid 才是事件主体，载荷字段不覆盖它。
+    """对账结论：Kernel-Process 的事件头 pid 才是事件主体。
 
     见 scripts/etw_pid_check.py 的实测输出：事件头 8/8 命中真实 PID。
+    该提供者不含 CommandLine 字段，命令行需由 Sysmon 提供。
     """
     from collect.etw.tdh import Property
 
     props = (
         Property("ProcessID", 8, 0, 0, 0, 0),
         Property("ParentProcessID", 8, 0, 0, 0, 0),
-        Property("ImageFileName", 1, 0, 0, 0, 0),
-        Property("CommandLine", 1, 0, 0, 0, 0),
+        Property("ImageName", 1, 0, 0, 0, 0),
+        Property("ProcessSequenceNumber", 10, 0, 0, 0, 0),
     )
+    image = r"C:\Windows\System32\cmd.exe"
     payload = (4242).to_bytes(4, "little") + (1).to_bytes(4, "little")
-    payload += "cmd.exe".encode("utf-16-le") + b"\x00\x00"
-    payload += "cmd.exe /c exit".encode("utf-16-le") + b"\x00\x00"
+    payload += image.encode("utf-16-le") + b"\x00\x00"
+    if len(payload) % 8:
+        payload += b"\x00" * (8 - len(payload) % 8)
+    payload += (6697650994420908032).to_bytes(8, "little")
 
     raw = RawEvent(
         ts_ns=0,
@@ -152,7 +197,9 @@ def test_to_event_uses_header_pid():
     event = normalize.to_event(raw)
     assert event.pid == 9999
     assert event.ppid == 1
-    assert event.cmdline == "cmd.exe /c exit"
+    assert event.process_key == 6697650994420908032
+    assert event.image.endswith("cmd.exe")
+    assert event.cmdline == ""
     assert event.extra["fields"]["ProcessID"] == 4242
 
 

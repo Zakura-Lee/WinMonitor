@@ -33,3 +33,6 @@ Thumbs.db
 选题申报表.docx
 ARCHITECTURE.md
 ETW_MIGRATION_PLAN.md
+
+# 第三方工具二进制（Sysmon 等，体积大且与平台绑定）
+tools/

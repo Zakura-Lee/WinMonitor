@@ -49,6 +49,9 @@ class Event:
     ppid: int = 0
     tid: int = 0
     process_key: int = 0
+    # Sysmon 提供进程 GUID，比 PID 更适合做进程树的主键
+    process_guid: str = ""
+    parent_guid: str = ""
 
     image: str = ""
     cmdline: str = ""

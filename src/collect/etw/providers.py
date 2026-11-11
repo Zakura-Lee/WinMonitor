@@ -71,7 +71,45 @@ KERNEL_REGISTRY = ProviderSpec(
 # 本阶段只启用进程提供者；文件、网络、注册表在 P6/P7 接入
 DEFAULT_PROVIDERS = (KERNEL_PROCESS,)
 
-ALL_PROVIDERS = (KERNEL_PROCESS, KERNEL_FILE, KERNEL_NETWORK, KERNEL_REGISTRY)
+# --- Sysmon ---------------------------------------------------------------
+# Sysmon 的事件由 Sysmon64.exe 记录，因此 EventHeader.ProcessId 是 Sysmon 自身，
+# 进程的真实 PID 必须取自载荷里的 ProcessId 字段。
+
+SYSMON = ProviderSpec(
+    name="Microsoft-Windows-Sysmon",
+    guid="{5770385F-C22A-43E0-BF4C-06F5698FFBD9}",
+    keywords=0,
+    level=5,
+)
+
+SYSMON_EVENT_NAMES = {
+    1: "ProcessCreate",
+    2: "FileCreateTime",
+    3: "NetworkConnect",
+    4: "SysmonServiceState",
+    5: "ProcessTerminate",
+    6: "DriverLoad",
+    7: "ImageLoad",
+    8: "CreateRemoteThread",
+    9: "RawAccessRead",
+    10: "ProcessAccess",
+    11: "FileCreate",
+    12: "RegistryCreateDelete",
+    13: "RegistryValueSet",
+    14: "RegistryRename",
+    15: "FileCreateStreamHash",
+    17: "PipeCreated",
+    18: "PipeConnected",
+    22: "DnsQuery",
+    23: "FileDelete",
+    25: "ProcessTampering",
+    26: "FileDeleteDetected",
+}
+
+# 本课题关心的事件：进程创建是核心，其余按 P6/P7 需要再放开
+SYSMON_CORE_EVENTS = (1, 5)
+
+ALL_PROVIDERS = (KERNEL_PROCESS, KERNEL_FILE, KERNEL_NETWORK, KERNEL_REGISTRY, SYSMON)
 
 
 def guid_bytes(guid_text):

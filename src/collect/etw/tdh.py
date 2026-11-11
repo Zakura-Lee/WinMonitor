@@ -232,8 +232,9 @@ def _decode_one(payload, offset, prop):
         offset = _align(offset, 4)
         if offset + 8 > len(payload):
             return None, len(payload)
-        revision = payload[offset]
         sub_count = payload[offset + 1]
+        if sub_count > 15:  # SID 最多 15 个子授权，超出说明已错位
+            return None, len(payload)
         size = 8 + 4 * sub_count
         raw = payload[offset: offset + size]
         return raw.hex(), min(offset + size, len(payload))

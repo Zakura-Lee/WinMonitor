@@ -106,6 +106,7 @@ def to_event(raw, provider_names=None):
     """把 RawEvent 转成 Event。
 
     优先使用 TDH 解析出的结构化字段；布局缺失时退回载荷字符串扫描。
+    不同提供者的字段名和 PID 语义不同，这里按提供者分派。
     """
     names = provider_names if provider_names is not None else providers.GUID_TO_NAME
     provider_name = names.get(raw.provider_id, "")
@@ -119,7 +120,33 @@ def to_event(raw, provider_names=None):
 
     strings = [] if fields else extract_wide_strings(raw.payload)
 
-    image = _field(fields, "ImageFileName", "ImageName", default="")
+    pid = raw.pid
+    ppid = 0
+    process_key = 0
+    process_guid = ""
+    parent_guid = ""
+    cmdline = ""
+    image = ""
+
+    if provider_name == providers.KERNEL_PROCESS.name:
+        # 实测对账：事件头 pid 即事件主体（8/8 命中真实 PID）
+        image = _field(fields, "ImageName", default="")
+        ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
+        # 该提供者没有 UniqueProcessKey，用序号作为 PID 复用的判别键
+        process_key = _field(fields, "ProcessSequenceNumber", "ProcessKey", default=0)
+    elif provider_name == providers.SYSMON.name:
+        # Sysmon 的事件由 Sysmon64.exe 记录，头里的 pid 是它自己
+        pid = _field(fields, "ProcessId", "ProcessID", default=raw.pid)
+        ppid = _field(fields, "ParentProcessId", "ParentProcessID", default=0)
+        image = _field(fields, "Image", "ImageName", default="")
+        cmdline = _field(fields, "CommandLine", default="")
+        process_guid = _field(fields, "ProcessGuid", default="")
+        parent_guid = _field(fields, "ParentProcessGuid", default="")
+    else:
+        image = _field(fields, "ImageName", "Image", default="")
+        ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
+        cmdline = _field(fields, "CommandLine", default="")
+
     if not image:
         for text in strings:
             if _looks_like_path(text):
@@ -133,17 +160,17 @@ def to_event(raw, provider_names=None):
         event_id=raw.event_id,
         level=raw.level,
         keyword=raw.keyword,
-        # 实测对账结论：事件头里的 pid 就是事件主体（8/8 命中真实 PID），
-        # 载荷中的 ProcessID 只作参考保留在 extra 里，不覆盖此字段
-        pid=raw.pid,
+        pid=pid,
         tid=raw.tid,
-        ppid=_field(fields, "ParentProcessID", "ParentProcessId", default=0),
+        ppid=ppid,
         session_id=_field(fields, "SessionID", "SessionId", default=0),
-        # Kernel-Process 没有 UniqueProcessKey，用序号作 PID 复用的判别键
-        process_key=_field(fields, "ProcessSequenceNumber", "ProcessKey", default=0),
+        process_key=process_key,
+        process_guid=process_guid,
+        parent_guid=parent_guid,
         image=nt_path_to_dos(image),
         path=nt_path_to_dos(image),
-        cmdline=_field(fields, "CommandLine", default=""),
+        cmdline=cmdline,
+        user=_field(fields, "User", default=""),
     )
 
     event.extra = {"fields": fields, "strings": strings}
