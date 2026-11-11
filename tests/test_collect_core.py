@@ -115,6 +115,31 @@ def test_session_config_keys_match_api():
     del buffer
 
 
+def test_decode_loop_drains_pending():
+    """停止后解码线程必须把队列里剩余的事件处理完，不能丢尾巴。"""
+    from collect.collector import EtwCollector
+
+    seen = []
+    collector = EtwCollector(session_name="DrainTest", on_event=seen.append)
+    for _ in range(3):
+        collector.bus.put(
+            RawEvent(
+                ts_ns=0,
+                provider_id=b"\x00" * 16,
+                event_id=3,
+                level=4,
+                keyword=0x20,
+                pid=1,
+                tid=2,
+                payload=b"",
+            )
+        )
+    # 未置位 _running，循环应在排空队列后自行返回
+    collector._decode_loop()
+    assert len(seen) == 3
+    assert collector.bus.qsize() == 0
+
+
 def test_collector_importable():
     from collect.collector import EtwCollector
 

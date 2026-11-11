@@ -44,6 +44,7 @@ class EtwCollector:
         self._running = threading.Event()
         self.decode_errors = 0
         self.handled = 0
+        self._consumer_snapshot = None
 
         self._config = {
             "buffer_size_kb": buffer_size_kb,
@@ -75,17 +76,24 @@ class EtwCollector:
     def stop(self):
         if not self._running.is_set():
             return
-        self._running.clear()
 
+        # 先停生产者，再让解码线程把总线里剩下的排空
         if self._consumer is not None:
             try:
                 self._consumer.stop()
             except Exception:  # noqa: BLE001
                 logger.debug("关闭消费者时出错", exc_info=True)
+            self._consumer_snapshot = {
+                "records": self._consumer.record_count,
+                "buffers": self._consumer.buffer_count,
+                "errors": self._consumer.error_count,
+                "process_rc": self._consumer.process_rc,
+            }
             self._consumer = None
 
+        self._running.clear()
         if self._worker is not None:
-            self._worker.join(timeout=2)
+            self._worker.join(timeout=5)
             self._worker = None
 
         if self._session is not None:
@@ -107,9 +115,14 @@ class EtwCollector:
     # -- 内部 -------------------------------------------------------------
 
     def _decode_loop(self):
-        while self._running.is_set():
+        # 停止信号只是不再接收新事件；队列里已有的必须处理完，
+        # 否则每次停止都会丢掉尾部的一批事件。
+        while True:
+            running = self._running.is_set()
             raw = self.bus.get(timeout=0.2)
             if raw is None:
+                if not running:
+                    break
                 continue
             try:
                 event = to_event(raw)
@@ -138,6 +151,8 @@ class EtwCollector:
                 "errors": self._consumer.error_count,
                 "process_rc": self._consumer.process_rc,
             }
+        elif self._consumer_snapshot is not None:
+            result["consumer"] = self._consumer_snapshot
         if self._session is not None:
             result["session_info"] = self._session.query()
         return result
