@@ -1,4 +1,5 @@
 import logging
+import os
 import queue
 import threading
 import time
@@ -22,6 +23,102 @@ class MonitorService:
         self.alert_subscribers = {}
         self.subscriber_id = 0
         self._subscriber_lock = threading.Lock()
+        # 采集后端
+        self.backend = getattr(config, "MONITOR_BACKEND", "legacy")
+        self.etw_collector = None
+        self.etw_primary = None
+        self.etw_fallback_reason = None
+
+    # -- 进程采集后端 -----------------------------------------------------
+
+    def _start_etw_backend(self, process_data, alert_queue):
+        """启动 ETW 进程采集。失败时返回 False，由调用方回退到 legacy。"""
+        try:
+            from collect.collector import EtwCollector
+            from collect.etw import providers as etw_providers
+        except Exception as exc:  # noqa: BLE001
+            self.etw_fallback_reason = f"导入采集层失败: {exc}"
+            return False
+
+        collector = EtwCollector(
+            session_name="WinMonitorMonitor",
+            on_event=self._on_etw_event,
+        )
+        try:
+            collector.start()
+        except Exception as exc:  # noqa: BLE001
+            self.etw_fallback_reason = f"启动失败: {exc}"
+            try:
+                collector.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+        # Sysmon 可用时以它为准（带命令行），否则退回内核进程事件
+        disabled = set(collector.disabled_providers)
+        if etw_providers.SYSMON.name not in disabled:
+            self.etw_primary = etw_providers.SYSMON.name
+        else:
+            self.etw_primary = etw_providers.KERNEL_PROCESS.name
+
+        self.etw_collector = collector
+        self.etw_fallback_reason = None
+        return True
+
+    def _on_etw_event(self, event):
+        """把采集层的 Event 转成 UI 与日志层使用的进程变化记录。"""
+        is_sysmon = event.provider == "Microsoft-Windows-Sysmon"
+
+        if is_sysmon:
+            if event.event_id == 1:
+                action = "started"
+            elif event.event_id == 5:
+                action = "stopped"
+            else:
+                return
+            if self.etw_primary != "Microsoft-Windows-Sysmon":
+                return  # 已切换到内核事件，避免重复计数
+        else:
+            if event.event_id == 1:
+                action = "started"
+            elif event.event_id == 2:
+                action = "stopped"
+            else:
+                return
+            if self.etw_primary == "Microsoft-Windows-Sysmon":
+                return  # Sysmon 已经报告过同一个进程
+
+        changes = self.process_data.setdefault("process_changes", [])
+        changes.insert(
+            0,
+            {
+                "time": time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
+                ),
+                "type": action,
+                "pid": event.pid,
+                "name": os.path.basename(event.image).lower() if event.image else "",
+                "exe_path": event.image,
+                "ppid": event.ppid,
+                "pname": "",
+                "cpu": 0.0,
+                "mem": 0.0,
+                "cmdline": event.cmdline,
+            },
+        )
+        del changes[200:]
+
+    def _stop_etw_backend(self):
+        if self.etw_collector is None:
+            return
+        try:
+            self.etw_collector.stop()
+        except Exception:  # noqa: BLE001
+            logging.debug("停止 ETW 采集器时出错", exc_info=True)
+        self.etw_collector = None
+        self.etw_primary = None
+
+    # -- 生命周期 ---------------------------------------------------------
 
     def start(self, username=None):
         if self.running:
@@ -34,70 +131,100 @@ class MonitorService:
         self.consumer_thread = threading.Thread(target=self._consume_alerts, daemon=True)
         self.consumer_thread.start()
 
-        self.monitor_threads = [
-            threading.Thread(target=process_mon.p_mon, args=(self.stop_event, self.process_data, self.alert_queue), daemon=True),
-            threading.Thread(target=file_mon.f_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-            threading.Thread(target=network_mon.n_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-            threading.Thread(target=registry_mon.r_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-            threading.Thread(target=audit_mon.audit_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-            threading.Thread(target=asset_mon.asset_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-        ]
+        self.monitor_threads = []
+        self.backend = getattr(config, "MONITOR_BACKEND", "legacy")
+
+        process_started = False
+        if self.backend == "etw":
+            process_started = self._start_etw_backend(self.process_data, self.alert_queue)
+            if not process_started:
+                logging.warning(
+                    "ETW 后端不可用，回退到 legacy 进程采集: %s", self.etw_fallback_reason
+                )
+                self.backend = "legacy"
+
+        if not process_started:
+            self.monitor_threads.append(
+                threading.Thread(
+                    target=process_mon.p_mon,
+                    args=(self.stop_event, self.process_data, self.alert_queue),
+                    daemon=True,
+                )
+            )
+
+        # 其余模块暂时仍用原有采集器，随 P5~P8 逐步迁移
+        self.monitor_threads.extend(
+            [
+                threading.Thread(target=file_mon.f_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
+                threading.Thread(target=network_mon.n_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
+                threading.Thread(target=registry_mon.r_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
+                threading.Thread(target=audit_mon.audit_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
+                threading.Thread(target=asset_mon.asset_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
+            ]
+        )
 
         for thread in self.monitor_threads:
             thread.start()
 
         self.running = True
-        logging.info("MonitorService 已启动")
+        logging.info(
+            "MonitorService 已启动 (后端=%s, 进程采集=%s)",
+            self.backend,
+            "etw" if process_started else "legacy",
+        )
+
+    def _shutdown(self, reset_start_time, message):
+        self.stop_event.set()
+        self._stop_etw_backend()
+        for thread in self.monitor_threads:
+            try:
+                thread.join(timeout=2)
+            except Exception:
+                pass
+        if self.consumer_thread is not None:
+            try:
+                self.consumer_thread.join(timeout=2)
+            except Exception:
+                pass
+        self.running = False
+        self.monitor_threads = []
+        self.consumer_thread = None
+        self.current_user = None
+        if reset_start_time:
+            self.start_time = None
+            self.process_data = {"process_changes": []}
+        logging.info(message)
 
     def stop(self):
         if not self.running:
             return
-        self.stop_event.set()
-        for thread in self.monitor_threads:
-            try:
-                thread.join(timeout=2)
-            except Exception:
-                pass
-        if self.consumer_thread is not None:
-            try:
-                self.consumer_thread.join(timeout=2)
-            except Exception:
-                pass
-        self.running = False
-        self.monitor_threads = []
-        self.consumer_thread = None
-        self.start_time = None
-        self.process_data = {"process_changes": []}
-        self.current_user = None
-        logging.info("MonitorService 已退出")
+        self._shutdown(True, "MonitorService 已退出")
 
     def pause(self):
         if not self.running:
             return
-        self.stop_event.set()
-        for thread in self.monitor_threads:
-            try:
-                thread.join(timeout=2)
-            except Exception:
-                pass
-        if self.consumer_thread is not None:
-            try:
-                self.consumer_thread.join(timeout=2)
-            except Exception:
-                pass
-        self.running = False
-        self.monitor_threads = []
-        self.consumer_thread = None
-        self.current_user = None
-        logging.info("MonitorService 已暂停")
+        self._shutdown(False, "MonitorService 已暂停")
 
     def status(self):
         active_threads = sum(1 for thread in self.monitor_threads if thread.is_alive())
-        return {
+        result = {
             "running": self.running,
             "active_threads": active_threads,
             "started_at": self.start_time,
+            "backend": self.backend,
+            "etw_primary": self.etw_primary,
+            "etw_fallback_reason": self.etw_fallback_reason,
         }
+        if self.etw_collector is not None:
+            try:
+                stats = self.etw_collector.stats()
+                result["etw"] = {
+                    "handled": stats.get("handled"),
+                    "bus": stats.get("bus"),
+                }
+            except Exception:  # noqa: BLE001
+                pass
+        return result
 
     def get_process_changes(self):
         return self.process_data.get("process_changes", []) if isinstance(self.process_data, dict) else []

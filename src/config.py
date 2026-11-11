@@ -425,3 +425,10 @@ ADMIN_DEFAULT_PASSWORD = "123456"
 # 其他配置
 MAX_ALERT_QUEUE_SIZE = 1000
 THREAD_JOIN_TIMEOUT = 5
+
+# 监控后端
+#   legacy : 原有采集器（WMI 轮询 / watchdog / 注册表轮询）
+#   etw    : 进程事件走 ETW 采集层，其余模块暂时仍用 legacy
+# ETW 后端需要管理员权限；启动失败会自动回退到 legacy。
+# 可通过环境变量 WINMON_BACKEND 覆盖，便于对照实验。
+MONITOR_BACKEND = os.environ.get("WINMON_BACKEND", "legacy").strip().lower()

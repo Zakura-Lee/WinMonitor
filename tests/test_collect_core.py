@@ -246,6 +246,32 @@ def test_decode_loop_drains_pending():
     assert collector.bus.qsize() == 0
 
 
+def test_monitor_status_exposes_backend():
+    from core.monitor import monitor_service
+
+    import config
+
+    status = monitor_service.status()
+    assert status["backend"] == config.MONITOR_BACKEND
+    assert "etw_primary" in status
+    assert "etw_fallback_reason" in status
+
+
+def test_etw_backend_falls_back_without_admin():
+    """非管理员时 ETW 后端应返回 False 并记录原因，由调用方回退到 legacy。"""
+    import ctypes
+
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        return  # 管理员环境下会真的建会话，跳过
+
+    from core.monitor import MonitorService
+
+    service = MonitorService()
+    started = service._start_etw_backend(service.process_data, service.alert_queue)
+    assert started is False
+    assert service.etw_fallback_reason
+
+
 def test_collector_importable():
     from collect.collector import EtwCollector
 
