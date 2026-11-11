@@ -65,13 +65,26 @@ def main(argv=None):
     print()
     print("=" * 58)
     print(f"process_changes 条数: {len(changes)}")
-    for entry in changes[:5]:
+
+    started = [c for c in changes if c["type"] == "started"]
+    print(f"其中 started: {len(started)}")
+    for entry in started[:5]:
         print(
-            f"    [{entry['type']}] pid={entry['pid']} name={entry['name']} "
-            f"ppid={entry['ppid']}"
+            f"    [started] pid={entry['pid']} name={entry['name']} "
+            f"ppid={entry['ppid']} pname={entry['pname'] or '-'}"
         )
         if entry["cmdline"]:
             print(f"        cmdline={entry['cmdline']}")
+
+    if service.process_table is not None:
+        print()
+        print(f"进程表统计: {service.process_table.stats()}")
+        for entry in started[:2]:
+            record = service.process_table.latest_by_pid(entry["pid"])
+            if record is None:
+                continue
+            chain = service.process_table.ancestors_names(record.key)
+            print(f"    父链 pid={entry['pid']}: {' <- '.join(chain)}")
 
     service._stop_etw_backend()
     print()

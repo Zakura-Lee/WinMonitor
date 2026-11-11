@@ -29,6 +29,7 @@ MODULES = [
     "collect.bus",
     "collect.normalize",
     "collect.collector",
+    "collect.proctree",
     "collect.etw.providers",
     "collect.etw.session",
     "collect.etw.consumer",

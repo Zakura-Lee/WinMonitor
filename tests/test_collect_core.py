@@ -246,6 +246,65 @@ def test_decode_loop_drains_pending():
     assert collector.bus.qsize() == 0
 
 
+def test_process_table_parent_chain():
+    from collect.proctree import ProcessTable
+
+    table = ProcessTable()
+    parent = Event(ts_ns=1000, pid=100, ppid=4, image=r"C:\Windows\System32\cmd.exe",
+                   process_guid="{A}")
+    child = Event(ts_ns=2000, pid=200, ppid=100, image=r"C:\Windows\System32\ping.exe",
+                  process_guid="{B}", parent_guid="{A}")
+
+    table.add_start(parent)
+    record = table.add_start(child)
+    assert record.parent_key == "guid:{A}"
+
+    names = table.ancestors_names(record.key)
+    assert names[0].endswith("ping.exe")
+    assert names[1].endswith("cmd.exe")
+    assert table.stats()["started"] == 2
+
+
+def test_process_table_marks_stop():
+    from collect.proctree import ProcessTable
+
+    table = ProcessTable()
+    start = Event(ts_ns=1000, pid=500, ppid=4, image=r"C:\a.exe", process_guid="{C}")
+    table.add_start(start)
+    stop = Event(ts_ns=9000, pid=500, ppid=0, process_guid="{C}")
+
+    record = table.mark_stop(stop)
+    assert record is not None
+    assert record.alive is False
+    assert record.stopped_ns == 9000
+    assert table.stats()["stopped"] == 1
+
+
+def test_process_table_pid_reuse_keeps_distinct_records():
+    from collect.proctree import ProcessTable
+
+    table = ProcessTable()
+    first = Event(ts_ns=1000, pid=700, ppid=4, image=r"C:\one.exe", process_guid="{D}")
+    second = Event(ts_ns=3000, pid=700, ppid=4, image=r"C:\two.exe", process_guid="{E}")
+    table.add_start(first)
+    table.add_start(second)
+
+    assert table.get("guid:{D}").image.endswith("one.exe")
+    assert table.get("guid:{E}").image.endswith("two.exe")
+    # 按 PID 查应返回最近一次出现的那个
+    assert table.latest_by_pid(700).image.endswith("two.exe")
+
+
+def test_process_table_records_unresolved_parent():
+    from collect.proctree import ProcessTable
+
+    table = ProcessTable()
+    orphan = Event(ts_ns=1000, pid=800, ppid=999, image=r"C:\orphan.exe")
+    record = table.add_start(orphan)
+    assert record.parent_key == ""
+    assert table.stats()["unresolved_parent"] == 1
+
+
 def test_monitor_status_exposes_backend():
     from core.monitor import monitor_service
 

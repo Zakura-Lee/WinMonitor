@@ -28,6 +28,13 @@ class MonitorService:
         self.etw_collector = None
         self.etw_primary = None
         self.etw_fallback_reason = None
+        # 活跃进程表：用 GUID / 进程序号做键，供父链查询与终止事件补全
+        try:
+            from collect.proctree import ProcessTable
+
+            self.process_table = ProcessTable()
+        except Exception:  # noqa: BLE001
+            self.process_table = None
 
     # -- 进程采集后端 -----------------------------------------------------
 
@@ -36,9 +43,12 @@ class MonitorService:
         try:
             from collect.collector import EtwCollector
             from collect.etw import providers as etw_providers
+            from collect.proctree import ProcessTable
         except Exception as exc:  # noqa: BLE001
             self.etw_fallback_reason = f"导入采集层失败: {exc}"
             return False
+
+        self.process_table = ProcessTable()
 
         collector = EtwCollector(
             session_name="WinMonitorMonitor",
@@ -88,6 +98,28 @@ class MonitorService:
             if self.etw_primary == "Microsoft-Windows-Sysmon":
                 return  # Sysmon 已经报告过同一个进程
 
+        if action == "started":
+            record = self.process_table.add_start(event)
+        else:
+            # 终止事件本身不带父进程信息，靠进程表补全
+            record = self.process_table.mark_stop(event)
+
+        if record is not None:
+            pid = record.pid
+            image = record.image
+            ppid = record.ppid
+            cmdline = record.cmdline
+            parent_key = record.parent_key
+        else:
+            pid = event.pid
+            image = event.image
+            ppid = event.ppid
+            cmdline = event.cmdline
+            parent_key = event.parent_guid and f"guid:{event.parent_guid}" or ""
+
+        parent = self.process_table.get(parent_key) if parent_key else None
+        pname = os.path.basename(parent.image).lower() if parent and parent.image else ""
+
         changes = self.process_data.setdefault("process_changes", [])
         changes.insert(
             0,
@@ -96,14 +128,14 @@ class MonitorService:
                     "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
                 ),
                 "type": action,
-                "pid": event.pid,
-                "name": os.path.basename(event.image).lower() if event.image else "",
-                "exe_path": event.image,
-                "ppid": event.ppid,
-                "pname": "",
+                "pid": pid,
+                "name": os.path.basename(image).lower() if image else "",
+                "exe_path": image,
+                "ppid": ppid,
+                "pname": pname,
                 "cpu": 0.0,
                 "mem": 0.0,
-                "cmdline": event.cmdline,
+                "cmdline": cmdline,
             },
         )
         del changes[200:]
@@ -224,6 +256,8 @@ class MonitorService:
                 }
             except Exception:  # noqa: BLE001
                 pass
+        if self.process_table is not None:
+            result["process_table"] = self.process_table.stats()
         return result
 
     def get_process_changes(self):
