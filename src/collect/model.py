@@ -32,6 +32,8 @@ class RawEvent:
     version: int = 0
     event_name: str = ""
     properties: tuple = ()
+    # 关注的事件类型才会填，走 TdhGetProperty 精确取值
+    decoded: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -66,6 +66,18 @@ TdhGetEventInformation.argtypes = [
 ]
 TdhGetEventInformation.restype = wintypes.ULONG
 
+TdhGetProperty = tdh.TdhGetProperty
+TdhGetProperty.argtypes = [
+    ctypes.POINTER(types.EVENT_RECORD),
+    wintypes.ULONG,
+    ctypes.c_void_p,
+    wintypes.ULONG,
+    ctypes.c_void_p,
+    ctypes.POINTER(wintypes.ULONG),
+    ctypes.c_void_p,
+]
+TdhGetProperty.restype = wintypes.ULONG
+
 # --- 杂项 -------------------------------------------------------------------
 
 IsUserAnAdmin = ctypes.WinDLL("shell32", use_last_error=True).IsUserAnAdmin

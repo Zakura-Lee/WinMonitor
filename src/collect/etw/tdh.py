@@ -244,7 +244,11 @@ def _decode_one(payload, offset, prop):
 
 
 def decode_payload(payload, properties):
-    """按属性布局把载荷解析成字典。"""
+    """按属性布局把载荷解析成字典。
+
+    注意: 这是按偏移顺序推算的实现，对字段对齐敏感的提供者（如 Sysmon）
+    会出现累积错位。关键事件请优先使用 decode_fields（走 TDH 取值）。
+    """
     result = {}
     offset = 0
     for prop in properties:
@@ -255,4 +259,79 @@ def decode_payload(payload, properties):
         except Exception:  # noqa: BLE001
             break
         result[prop.name] = value
+    return result
+
+
+class _PropertyDataDescriptor(ctypes.Structure):
+    _fields_ = [
+        ("PropertyName", ctypes.c_ulonglong),
+        ("ArrayIndex", wintypes.ULONG),
+        ("Reserved", wintypes.ULONG),
+    ]
+
+
+_INDEX_NOT_ARRAY = 0xFFFFFFFF
+_MAX_PROPERTY_BYTES = 65536
+
+
+def _get_property_raw(record, name):
+    """让 TDH 自己完成偏移计算，取回属性原始字节。"""
+    name_buffer = ctypes.create_unicode_buffer(name)
+    descriptor = _PropertyDataDescriptor()
+    descriptor.PropertyName = ctypes.cast(name_buffer, ctypes.c_void_p).value
+    descriptor.ArrayIndex = _INDEX_NOT_ARRAY
+    descriptor.Reserved = 0
+
+    size = wintypes.ULONG(_MAX_PROPERTY_BYTES)
+    buffer = ctypes.create_string_buffer(_MAX_PROPERTY_BYTES)
+    rc = api.TdhGetProperty(
+        ctypes.byref(record),
+        0,
+        None,
+        1,
+        ctypes.byref(descriptor),
+        ctypes.byref(size),
+        buffer,
+    )
+    if rc != 0 or size.value > _MAX_PROPERTY_BYTES:
+        return None
+    return buffer.raw[: size.value]
+
+
+def _decode_raw_value(raw, in_type):
+    if raw is None:
+        return None
+    if in_type in (INTYPE_UNICODESTRING, INTYPE_ANSISTRING):
+        if in_type == INTYPE_UNICODESTRING:
+            text = raw.decode("utf-16-le", "ignore")
+        else:
+            text = raw.decode("utf-8", "ignore")
+        return text.split("\x00")[0]
+    if in_type in _INT_TYPES and len(raw) >= 1:
+        size, signed = _INT_TYPES[in_type]
+        chunk = raw[:size] if len(raw) >= size else raw
+        return int.from_bytes(chunk, "little", signed=signed)
+    if in_type == INTYPE_GUID and len(raw) >= 16:
+        from .etwtypes import GUID
+
+        return str(GUID.from_buffer_copy(raw[:16]))
+    if in_type == INTYPE_SID:
+        return raw.hex()
+    if len(raw) >= 1:
+        return int.from_bytes(raw, "little")
+    return None
+
+
+def decode_fields(record, properties):
+    """逐属性调用 TDH 取值，完全避免自行推算偏移。
+
+    只应用于关注的事件类型：每次调用是一次 API 往返，
+    高频事件（如 ImageLoad）不应走这条路径。
+    """
+    result = {}
+    for prop in properties:
+        if not prop.name:
+            continue
+        raw = _get_property_raw(record, prop.name)
+        result[prop.name] = _decode_raw_value(raw, prop.in_type)
     return result

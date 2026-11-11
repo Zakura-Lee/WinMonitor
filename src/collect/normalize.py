@@ -112,7 +112,10 @@ def to_event(raw, provider_names=None):
     provider_name = names.get(raw.provider_id, "")
 
     fields = {}
-    if raw.properties:
+    if raw.decoded:
+        # 精确路径：由 TdhGetProperty 逐字段取值，不受载荷对齐影响
+        fields = raw.decoded
+    elif raw.properties:
         try:
             fields = tdh.decode_payload(raw.payload, raw.properties)
         except Exception:  # noqa: BLE001 - 解析失败退回字符串扫描

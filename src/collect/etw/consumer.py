@@ -13,7 +13,20 @@ import threading
 
 from ..model import FILETIME_EPOCH_DELTA, RawEvent
 from . import api, etwtypes as types
+from . import providers as provider_specs
+from . import tdh
 from .tdh import LayoutCache
+
+# 只对这些事件做精确字段解码：每次解码都是一次 TDH API 往返，
+# 高频事件（ImageLoad/ThreadStart）不应走这条路径。
+_DECODE_EVENTS = frozenset(
+    {
+        (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_START),
+        (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_STOP),
+        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 1),
+        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 5),
+    }
+)
 
 
 class EtwConsumerError(RuntimeError):
@@ -116,6 +129,13 @@ class EtwConsumer:
                 record, provider_id, descriptor.Id, descriptor.Version
             )
 
+            decoded = {}
+            if (provider_id, descriptor.Id) in _DECODE_EVENTS and properties:
+                try:
+                    decoded = tdh.decode_fields(record, properties)
+                except Exception:  # noqa: BLE001
+                    decoded = {}
+
             raw = RawEvent(
                 ts_ns=(header.TimeStamp - FILETIME_EPOCH_DELTA) * 100,
                 provider_id=provider_id,
@@ -128,6 +148,7 @@ class EtwConsumer:
                 version=descriptor.Version,
                 event_name=event_name,
                 properties=properties,
+                decoded=decoded,
             )
             self.record_count += 1
             self._sink(raw)
