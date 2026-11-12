@@ -18,6 +18,7 @@ class MonitorService:
         self.start_time = None
         self.process_data = {"process_changes": []}
         self.network_events = []
+        self.file_events = []
         self.current_user = None
         self.critical_alerts = []
         self.max_critical_alerts = 50
@@ -77,18 +78,22 @@ class MonitorService:
         return True
 
     def _on_etw_event(self, event):
-        """把采集层的 Event 分派到进程或网络处理。"""
+        """把采集层的 Event 分派到进程、网络或文件处理。"""
         is_sysmon = event.provider == "Microsoft-Windows-Sysmon"
 
         if is_sysmon:
-            if self.etw_primary != "Microsoft-Windows-Sysmon":
-                return  # 已切换到内核进程事件，避免重复计数
-            if event.event_id == 1:
-                self._handle_process_event(event, "started")
-            elif event.event_id == 5:
-                self._handle_process_event(event, "stopped")
+            if event.event_id == 1 or event.event_id == 5:
+                # 进程事件受主提供者开关约束，避免与内核事件重复计数
+                if self.etw_primary != "Microsoft-Windows-Sysmon":
+                    return
+                action = "started" if event.event_id == 1 else "stopped"
+                self._handle_process_event(event, action)
             elif event.event_id == 3:
                 self._handle_network_event(event)
+            elif event.event_id == 11:
+                self._handle_file_event(event, "created")
+            elif event.event_id == 23:
+                self._handle_file_event(event, "deleted")
             return
 
         if self.etw_primary == "Microsoft-Windows-Sysmon":
@@ -178,6 +183,41 @@ class MonitorService:
             except queue.Full:
                 logging.debug("告警队列已满，丢弃网络告警")
 
+    def _handle_file_event(self, event, action):
+        from collect.detect import classify_file
+
+        kind, reason, severity = classify_file(event, action)
+        parent = self.process_table.latest_by_pid(event.ppid) if event.ppid else None
+
+        record = {
+            "time": time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
+            ),
+            "action": action,
+            "path": event.path,
+            "type": kind,
+            "reason": reason,
+            "pid": event.pid,
+            "process_name": os.path.basename(event.image).lower() if event.image else "",
+            "process_exe": event.image,
+            "parent_name": os.path.basename(parent.image).lower() if parent and parent.image else "",
+        }
+        self.file_events.insert(0, record)
+        del self.file_events[500:]
+
+        if kind == "danger" and severity:
+            try:
+                self.alert_queue.put_nowait(
+                    {
+                        "category": "file",
+                        "title": "文件安全警告",
+                        "message": f"{action} {event.path} ({reason})",
+                        "severity": severity,
+                    }
+                )
+            except queue.Full:
+                logging.debug("告警队列已满，丢弃文件告警")
+
     def _stop_etw_backend(self):
         if self.etw_collector is None:
             return
@@ -199,6 +239,7 @@ class MonitorService:
             self.start_time = time.time()
             self.process_data = {"process_changes": []}
             self.network_events = []
+            self.file_events = []
         self.consumer_thread = threading.Thread(target=self._consume_alerts, daemon=True)
         self.consumer_thread.start()
 

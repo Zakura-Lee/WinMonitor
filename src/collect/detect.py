@@ -3,18 +3,27 @@
 """
 事件判定规则
 
-本阶段只有网络连接的分类，进程与文件规则在后续阶段补入。
+当前覆盖网络连接与文件写入两类，进程规则在后续阶段补入。
 判定结果统一返回 (event_type, reason, severity)：
-    event_type : normal / abnormal / attack
+    event_type : normal / abnormal / attack / danger
     severity   : None / warning / critical
 """
 
+import os
+
 import config
+from utils.paths import matches_prefix
 
 HIGH_RISK_PORTS = config.HIGH_RISK_REMOTE_PORTS
 SQL_PORTS = config.SQL_REMOTE_PORTS
 SAFE_PUBLIC_PORTS = config.SAFE_PUBLIC_PORTS
 PRIVATE_PREFIXES = config.PRIVATE_PREFIXES
+
+DANGEROUS_EXTENSIONS = config.DANGEROUS_FILE_EXTENSIONS
+TRUSTED_PATHS = config.FILE_MONITOR_TRUSTED_PATHS
+SENSITIVE_PATHS = config.FILE_MONITOR_SENSITIVE_PATHS
+TEMP_PATTERNS = config.TEMP_PATH_PATTERNS
+FILE_SCORE_THRESHOLD = config.FILE_MONITOR_EVENT_SCORE_THRESHOLD
 
 
 def is_public_address(address):
@@ -49,3 +58,40 @@ def classify_network(event):
     if not external:
         return "normal", "内网连接", None
     return "normal", "外部连接", None
+
+
+def classify_file(event, action="created"):
+    """对一次文件写入/删除给出分类结果。
+
+    评分思路沿用旧文件监控：可执行扩展、敏感路径、临时目录三项加权，
+    落在信任目录下的操作直接放行。
+    """
+    path = event.path
+    if not path:
+        return "normal", "无路径信息", None
+
+    if matches_prefix(path, TRUSTED_PATHS):
+        return "normal", "信任路径", None
+
+    normalized = str(path).lower().replace("/", "\\")
+    score = 0
+    reasons = []
+
+    extension = os.path.splitext(normalized)[1]
+    if extension in DANGEROUS_EXTENSIONS:
+        score += 2
+        reasons.append(f"可执行扩展 {extension}")
+
+    if matches_prefix(path, SENSITIVE_PATHS):
+        score += 1
+        reasons.append("敏感路径")
+
+    if any(pattern in normalized for pattern in TEMP_PATTERNS):
+        score += 1
+        reasons.append("临时目录")
+
+    if score < FILE_SCORE_THRESHOLD:
+        return "normal", "；".join(reasons) or "常规文件操作", None
+
+    severity = "critical" if score >= 3 else "warning"
+    return "danger", f"{action}：" + "；".join(reasons), severity

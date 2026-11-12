@@ -322,15 +322,23 @@ def _decode_raw_value(raw, in_type):
     return None
 
 
-def decode_fields(record, properties):
+def decode_fields(record, properties, wanted=None):
     """逐属性调用 TDH 取值，完全避免自行推算偏移。
 
-    只应用于关注的事件类型：每次调用是一次 API 往返，
-    高频事件（如 ImageLoad）不应走这条路径。
+    只应用于关注的事件类型：每次调用是一次 API 往返。
+    wanted 不为空时只取这些字段（不区分大小写），
+    用于高频事件降低开销。
     """
+    if wanted:
+        wanted_lower = {name.lower() for name in wanted}
+    else:
+        wanted_lower = None
+
     result = {}
     for prop in properties:
         if not prop.name:
+            continue
+        if wanted_lower is not None and prop.name.lower() not in wanted_lower:
             continue
         raw = _get_property_raw(record, prop.name)
         result[prop.name] = _decode_raw_value(raw, prop.in_type)

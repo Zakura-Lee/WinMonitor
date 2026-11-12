@@ -19,15 +19,26 @@ from .tdh import LayoutCache
 
 # 只对这些事件做精确字段解码：每次解码都是一次 TDH API 往返，
 # 高频事件（ImageLoad/ThreadStart）不应走这条路径。
-_DECODE_EVENTS = frozenset(
-    {
-        (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_START),
-        (provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid), provider_specs.EVENT_PROCESS_STOP),
-        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 1),
-        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 3),
-        (provider_specs.guid_bytes(provider_specs.SYSMON.guid), 5),
-    }
-)
+# 值是要取的字段名（None 表示全部），用于高频事件做裁剪。
+_KERNEL_GUID = provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid)
+_SYSMON_GUID = provider_specs.guid_bytes(provider_specs.SYSMON.guid)
+
+# 文件事件只取这几个字段：Sysmon 的 FileCreate/FileDelete 字段不多，
+# 但两者都出现在高频路径上，裁剪后能省掉一半以上的 API 往返。
+_FILE_FIELDS = ("UtcTime", "ProcessGuid", "ProcessId", "Image", "TargetFilename", "User")
+
+_DECODE_EVENTS = {
+    (_KERNEL_GUID, provider_specs.EVENT_PROCESS_START): None,
+    (_KERNEL_GUID, provider_specs.EVENT_PROCESS_STOP): None,
+    (_SYSMON_GUID, 1): None,
+    (_SYSMON_GUID, 3): None,
+    (_SYSMON_GUID, 5): None,
+    (_SYSMON_GUID, 11): _FILE_FIELDS,   # FileCreate
+    (_SYSMON_GUID, 23): _FILE_FIELDS,   # FileDelete
+}
+
+# 区分「没登记解码」与「登记了解码全部字段（值为 None）」
+_NOT_DECODED = object()
 
 
 class EtwConsumerError(RuntimeError):
@@ -131,9 +142,10 @@ class EtwConsumer:
             )
 
             decoded = {}
-            if (provider_id, descriptor.Id) in _DECODE_EVENTS and properties:
+            wanted = _DECODE_EVENTS.get((provider_id, descriptor.Id), _NOT_DECODED)
+            if wanted is not _NOT_DECODED and properties:
                 try:
-                    decoded = tdh.decode_fields(record, properties)
+                    decoded = tdh.decode_fields(record, properties, wanted)
                 except Exception:  # noqa: BLE001
                     decoded = {}
 

@@ -145,6 +145,7 @@ def to_event(raw, provider_names=None):
     sport = 0
     dport = 0
     proto = ""
+    file_path = ""
 
     if provider_name == providers.KERNEL_PROCESS.name:
         # 实测对账：事件头 pid 即事件主体（8/8 命中真实 PID）
@@ -166,6 +167,8 @@ def to_event(raw, provider_names=None):
             sport = _to_int(_field(fields, "SourcePort"))
             dport = _to_int(_field(fields, "DestinationPort"))
             proto = _field(fields, "Protocol", default="")
+        elif raw.event_id in (11, 23):  # FileCreate / FileDelete
+            file_path = _field(fields, "TargetFilename", "TargetFileName", default="")
     else:
         image = _field(fields, "ImageName", "Image", default="")
         ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
@@ -192,7 +195,7 @@ def to_event(raw, provider_names=None):
         process_guid=process_guid,
         parent_guid=parent_guid,
         image=nt_path_to_dos(image),
-        path=nt_path_to_dos(image),
+        path=nt_path_to_dos(file_path) if file_path else nt_path_to_dos(image),
         cmdline=cmdline,
         user=_field(fields, "User", default=""),
         integrity=_field(fields, "IntegrityLevel", default=""),

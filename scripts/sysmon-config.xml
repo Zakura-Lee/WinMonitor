@@ -4,10 +4,15 @@
 
     实测现象：默认安装（不带配置文件）时 Sysmon 只记录 ProcessCreate(1)
     与 ProcessTerminate(5)，NetworkConnect(3) 并不落日志。
-    因此这里显式声明一次 NetworkConnect，用「排除法」表达：
-    只排除 svchost，其余连接全部记录。
+    因此这里显式声明需要的事件类型，统一用「排除法」表达：
+    只排除明确噪声项，其余全部记录。
 
-    未在配置中出现的其他事件类型保持 Sysmon 默认行为。
+    关注的事件：
+        1  ProcessCreate      —— 进程创建（默认已记录，此处无需声明）
+        3  NetworkConnect     —— 网络连接
+        5  ProcessTerminate   —— 进程退出（默认已记录）
+        11 FileCreate         —— 文件创建
+        23 FileDelete         —— 文件删除
 
     应用方式（管理员，无需重装）：
         Sysmon64.exe -c "F:\Security Tool Development\WinMonitor\scripts\sysmon-config.xml"
@@ -20,10 +25,30 @@
 
   <EventFiltering>
     <RuleGroup name="" groupRelation="or">
+
+      <!-- 网络连接：只排除 svchost，避免系统服务刷屏 -->
       <NetworkConnect onmatch="exclude">
-        <!-- 系统服务产生的连接量极大且噪声高，先排除 -->
         <Image condition="is">C:\Windows\System32\svchost.exe</Image>
       </NetworkConnect>
+
+      <!-- 文件创建：排除浏览器缓存与系统维护目录 -->
+      <FileCreate onmatch="exclude">
+        <TargetFilename condition="contains">\AppData\Local\Microsoft\Edge\User Data\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Local\Google\Chrome\User Data\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Local\Mozilla\Firefox\Profiles\</TargetFilename>
+        <TargetFilename condition="contains">\Windows\SoftwareDistribution\</TargetFilename>
+        <TargetFilename condition="contains">\Windows\WinSxS\</TargetFilename>
+      </FileCreate>
+
+      <!-- 文件删除：口径与创建保持一致 -->
+      <FileDelete onmatch="exclude">
+        <TargetFilename condition="contains">\AppData\Local\Microsoft\Edge\User Data\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Local\Google\Chrome\User Data\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Local\Mozilla\Firefox\Profiles\</TargetFilename>
+        <TargetFilename condition="contains">\Windows\SoftwareDistribution\</TargetFilename>
+        <TargetFilename condition="contains">\Windows\WinSxS\</TargetFilename>
+      </FileDelete>
+
     </RuleGroup>
   </EventFiltering>
 </Sysmon>

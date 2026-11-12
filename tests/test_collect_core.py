@@ -270,6 +270,56 @@ def test_decode_loop_skips_unknown_provider():
     assert collector.handled == 0
 
 
+def test_classify_file():
+    from collect.detect import classify_file
+
+    trusted = Event(ts_ns=0, path=r"C:\Windows\System32\drivers\ndis.sys")
+    assert classify_file(trusted)[0] == "normal"
+
+    dropped = Event(ts_ns=0, path=r"C:\Users\a\AppData\Local\Temp\evil.exe")
+    kind, reason, severity = classify_file(dropped)
+    assert kind == "danger"
+    assert severity == "critical"
+    assert "可执行扩展" in reason
+
+    benign = Event(ts_ns=0, path=r"D:\work\notes.txt")
+    assert classify_file(benign)[0] == "normal"
+
+    empty = Event(ts_ns=0, path="")
+    assert classify_file(empty)[0] == "normal"
+
+
+def test_to_event_sysmon_file_create():
+    from collect.etw.tdh import Property
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("Image", 1, 0, 0, 0, 0),
+        Property("TargetFilename", 1, 0, 0, 0, 0),
+        Property("ProcessGuid", 1, 0, 0, 0, 0),
+    )
+    payload = (4321).to_bytes(4, "little")
+    payload += r"C:\Windows\System32\powershell.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += r"C:\Users\a\AppData\Local\Temp\dropper.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "{AAAA}".encode("utf-16-le") + b"\x00\x00"
+
+    raw = RawEvent(
+        ts_ns=0,
+        provider_id=providers.guid_bytes(providers.SYSMON.guid),
+        event_id=11,
+        level=4,
+        keyword=0,
+        pid=999,
+        tid=1,
+        payload=payload,
+        properties=props,
+    )
+    event = normalize.to_event(raw)
+    assert event.path.endswith("dropper.exe")
+    assert event.image.endswith("powershell.exe")
+    assert event.pid == 4321
+
+
 def test_format_endpoint():
     from collect.detect import format_endpoint
 
