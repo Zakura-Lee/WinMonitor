@@ -19,6 +19,7 @@ class MonitorService:
         self.process_data = {"process_changes": []}
         self.network_events = []
         self.file_events = []
+        self.registry_events = []
         self.current_user = None
         self.critical_alerts = []
         self.max_critical_alerts = 50
@@ -94,6 +95,8 @@ class MonitorService:
                 self._handle_file_event(event, "created")
             elif event.event_id == 23:
                 self._handle_file_event(event, "deleted")
+            elif event.event_id in (12, 13, 14):
+                self._handle_registry_event(event)
             return
 
         if self.etw_primary == "Microsoft-Windows-Sysmon":
@@ -218,6 +221,42 @@ class MonitorService:
             except queue.Full:
                 logging.debug("告警队列已满，丢弃文件告警")
 
+    def _handle_registry_event(self, event):
+        from collect.detect import classify_registry
+
+        kind, reason, severity = classify_registry(event)
+        parent = self.process_table.latest_by_pid(event.ppid) if event.ppid else None
+
+        record = {
+            "time": time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
+            ),
+            "key": event.key,
+            "value": event.value,
+            "action": (event.extra or {}).get("registry_action", ""),
+            "type": kind,
+            "reason": reason,
+            "pid": event.pid,
+            "process_name": os.path.basename(event.image).lower() if event.image else "",
+            "process_exe": event.image,
+            "parent_name": os.path.basename(parent.image).lower() if parent and parent.image else "",
+        }
+        self.registry_events.insert(0, record)
+        del self.registry_events[500:]
+
+        if kind in ("abnormal", "danger") and severity:
+            try:
+                self.alert_queue.put_nowait(
+                    {
+                        "category": "registry",
+                        "title": "注册表可疑写入" if kind == "danger" else "自启动项变更",
+                        "message": f"{event.key} = {event.value} ({reason})",
+                        "severity": severity,
+                    }
+                )
+            except queue.Full:
+                logging.debug("告警队列已满，丢弃注册表告警")
+
     def _stop_etw_backend(self):
         if self.etw_collector is None:
             return
@@ -240,6 +279,7 @@ class MonitorService:
             self.process_data = {"process_changes": []}
             self.network_events = []
             self.file_events = []
+            self.registry_events = []
         self.consumer_thread = threading.Thread(target=self._consume_alerts, daemon=True)
         self.consumer_thread.start()
 

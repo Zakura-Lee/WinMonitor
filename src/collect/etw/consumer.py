@@ -27,14 +27,29 @@ _SYSMON_GUID = provider_specs.guid_bytes(provider_specs.SYSMON.guid)
 # 但两者都出现在高频路径上，裁剪后能省掉一半以上的 API 往返。
 _FILE_FIELDS = ("UtcTime", "ProcessGuid", "ProcessId", "Image", "TargetFilename", "User")
 
+# 注册表事件字段更少，但同样在热路径上
+_REGISTRY_FIELDS = (
+    "UtcTime",
+    "ProcessGuid",
+    "ProcessId",
+    "Image",
+    "TargetObject",
+    "Details",
+    "EventType",
+    "User",
+)
+
 _DECODE_EVENTS = {
     (_KERNEL_GUID, provider_specs.EVENT_PROCESS_START): None,
     (_KERNEL_GUID, provider_specs.EVENT_PROCESS_STOP): None,
     (_SYSMON_GUID, 1): None,
     (_SYSMON_GUID, 3): None,
     (_SYSMON_GUID, 5): None,
-    (_SYSMON_GUID, 11): _FILE_FIELDS,   # FileCreate
-    (_SYSMON_GUID, 23): _FILE_FIELDS,   # FileDelete
+    (_SYSMON_GUID, 11): _FILE_FIELDS,        # FileCreate
+    (_SYSMON_GUID, 23): _FILE_FIELDS,        # FileDelete
+    (_SYSMON_GUID, 12): _REGISTRY_FIELDS,    # RegistryCreateDelete
+    (_SYSMON_GUID, 13): _REGISTRY_FIELDS,    # RegistryValueSet
+    (_SYSMON_GUID, 14): _REGISTRY_FIELDS,    # RegistryRename
 }
 
 # 区分「没登记解码」与「登记了解码全部字段（值为 None）」

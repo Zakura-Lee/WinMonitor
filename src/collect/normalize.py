@@ -146,6 +146,9 @@ def to_event(raw, provider_names=None):
     dport = 0
     proto = ""
     file_path = ""
+    reg_key = ""
+    reg_value = ""
+    reg_action = ""
 
     if provider_name == providers.KERNEL_PROCESS.name:
         # 实测对账：事件头 pid 即事件主体（8/8 命中真实 PID）
@@ -169,6 +172,10 @@ def to_event(raw, provider_names=None):
             proto = _field(fields, "Protocol", default="")
         elif raw.event_id in (11, 23):  # FileCreate / FileDelete
             file_path = _field(fields, "TargetFilename", "TargetFileName", default="")
+        elif raw.event_id in (12, 13, 14):  # RegistryEvent
+            reg_key = _field(fields, "TargetObject", default="")
+            reg_value = _field(fields, "Details", default="")
+            reg_action = _field(fields, "EventType", default="")
     else:
         image = _field(fields, "ImageName", "Image", default="")
         ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
@@ -204,7 +211,11 @@ def to_event(raw, provider_names=None):
         daddr=daddr,
         dport=dport,
         proto=proto,
+        key=reg_key,
+        value=reg_value,
     )
 
     event.extra = {"fields": fields, "strings": strings}
+    if reg_action:
+        event.extra["registry_action"] = reg_action
     return event

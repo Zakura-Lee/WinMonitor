@@ -49,6 +49,16 @@
         <TargetFilename condition="contains">\Windows\WinSxS\</TargetFilename>
       </FileDelete>
 
+      <!--
+        注册表：用「白名单」方式只收自启动相关键。
+        注册表写入事件量极大，全收不现实；这里只保留 Run/RunOnce。
+        如需监控服务注册，可再加 \SYSTEM\CurrentControlSet\Services\，
+        但要先评估噪声。
+      -->
+      <RegistryEvent onmatch="include">
+        <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+      </RegistryEvent>
+
     </RuleGroup>
   </EventFiltering>
 </Sysmon>

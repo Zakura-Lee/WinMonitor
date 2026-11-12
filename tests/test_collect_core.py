@@ -270,6 +270,71 @@ def test_decode_loop_skips_unknown_provider():
     assert collector.handled == 0
 
 
+def test_classify_registry():
+    from collect.detect import classify_registry
+
+    run_key = Event(
+        ts_ns=0,
+        key=r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Foo",
+        value=r"C:\Program Files\App\app.exe",
+    )
+    kind, reason, severity = classify_registry(run_key)
+    assert kind == "abnormal"
+    assert severity == "warning"
+    assert "自启动" in reason
+
+    suspicious = Event(
+        ts_ns=0,
+        key=r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\X",
+        value=r"powershell -w hidden -enc AAAA",
+    )
+    assert classify_registry(suspicious)[0] == "danger"
+    assert classify_registry(suspicious)[2] == "critical"
+
+    run_once = Event(
+        ts_ns=0,
+        key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce\Y",
+        value="ok",
+    )
+    assert classify_registry(run_once)[0] == "normal"
+
+    assert classify_registry(Event(ts_ns=0, key=""))[0] == "normal"
+
+
+def test_to_event_sysmon_registry():
+    from collect.etw.tdh import Property
+
+    props = (
+        Property("ProcessId", 8, 0, 0, 0, 0),
+        Property("Image", 1, 0, 0, 0, 0),
+        Property("TargetObject", 1, 0, 0, 0, 0),
+        Property("Details", 1, 0, 0, 0, 0),
+        Property("EventType", 1, 0, 0, 0, 0),
+    )
+    key = r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\WinMonitorProbe"
+    payload = (7777).to_bytes(4, "little")
+    payload += r"C:\Windows\System32\reg.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += key.encode("utf-16-le") + b"\x00\x00"
+    payload += r"C:\Windows\System32\cmd.exe".encode("utf-16-le") + b"\x00\x00"
+    payload += "SetValue".encode("utf-16-le") + b"\x00\x00"
+
+    raw = RawEvent(
+        ts_ns=0,
+        provider_id=providers.guid_bytes(providers.SYSMON.guid),
+        event_id=13,
+        level=4,
+        keyword=0,
+        pid=999,
+        tid=1,
+        payload=payload,
+        properties=props,
+    )
+    event = normalize.to_event(raw)
+    assert event.key == key
+    assert event.value.endswith("cmd.exe")
+    assert event.extra["registry_action"] == "SetValue"
+
+
 def test_classify_file():
     from collect.detect import classify_file
 
