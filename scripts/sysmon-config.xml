@@ -2,17 +2,18 @@
 <!--
     WinMonitor 使用的 Sysmon 配置
 
-    关注点：
-        1. ProcessCreate (1)  —— 进程创建，含命令行、父进程、哈希
-        2. ProcessTerminate (5) —— 进程退出
-        3. NetworkConnect (3) —— 网络连接
+    实测现象：默认安装（不带配置文件）时 Sysmon 只记录 ProcessCreate(1)
+    与 ProcessTerminate(5)，NetworkConnect(3) 并不落日志。
+    因此这里显式声明一次 NetworkConnect，用「排除法」表达：
+    只排除 svchost，其余连接全部记录。
 
-    NetworkConnect 用「排除法」表达：只排除 svchost，其余全部记录。
-    如果某些事件类型没有出现在这里，Sysmon 会按默认策略处理，
-    实测默认安装下 NetworkConnect 并不落日志，所以必须显式声明。
+    未在配置中出现的其他事件类型保持 Sysmon 默认行为。
 
-    应用方式（管理员）：
-        Sysmon64.exe -c sysmon-config.xml
+    应用方式（管理员，无需重装）：
+        Sysmon64.exe -c "F:\Security Tool Development\WinMonitor\scripts\sysmon-config.xml"
+
+    查看生效配置：
+        Sysmon64.exe -c
 -->
 <Sysmon schemaversion="4.90">
   <HashAlgorithms>sha256</HashAlgorithms>
@@ -23,11 +24,6 @@
         <!-- 系统服务产生的连接量极大且噪声高，先排除 -->
         <Image condition="is">C:\Windows\System32\svchost.exe</Image>
       </NetworkConnect>
-    </RuleGroup>
-
-    <RuleGroup name="" groupRelation="or">
-      <ProcessCreate onmatch="exclude" />
-      <ProcessTerminate onmatch="exclude" />
     </RuleGroup>
   </EventFiltering>
 </Sysmon>
