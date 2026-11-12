@@ -522,6 +522,28 @@ def test_process_table_records_unresolved_parent():
     assert table.stats()["unresolved_parent"] == 1
 
 
+def test_plan_collectors_etw_skips_legacy():
+    """ETW 成功启动时，不应再装配已被覆盖的 legacy 采集器。"""
+    from core.monitor import plan_collectors
+
+    names = plan_collectors("etw", True)
+    assert names == ["audit", "asset"]
+    for legacy in ("process", "file", "network", "registry"):
+        assert legacy not in names, f"{legacy} 不应在 ETW 模式下启动"
+
+
+def test_plan_collectors_legacy_full():
+    from core.monitor import plan_collectors
+
+    names = plan_collectors("legacy", False)
+    for expected in ("process", "file", "network", "registry", "audit", "asset"):
+        assert expected in names
+
+    # ETW 声明成功但实际没起来时，也要退回全套，避免漏采
+    fallback = plan_collectors("etw", False)
+    assert fallback == names
+
+
 def test_monitor_status_exposes_backend():
     from core.monitor import monitor_service
 

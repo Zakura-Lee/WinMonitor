@@ -7,6 +7,24 @@ from models.log_model import insert_log
 import config
 from modules import process_mon, file_mon, network_mon, registry_mon, audit_mon, asset_mon
 
+# ETW 后端已经覆盖的采集类别：这些模块不再启动 legacy 版本，
+# 否则等于两套采集并行，开销翻倍且会产生重复告警。
+ETW_COVERED = ("process", "file", "network", "registry")
+
+# Sysmon 覆盖不到、任何后端下都需要的采集器
+ALWAYS_ON = ("audit", "asset")
+
+
+def plan_collectors(backend, process_started):
+    """决定本次启动要装配哪些采集器。
+
+    backend 为 etw 且 ETW 成功启动时，只保留审计与资产；
+    否则退回全套 legacy 采集器。
+    """
+    if backend == "etw" and process_started:
+        return list(ALWAYS_ON)
+    return ["process", "file", "network", "registry"] + list(ALWAYS_ON)
+
 
 class MonitorService:
     def __init__(self):
@@ -31,6 +49,7 @@ class MonitorService:
         self.etw_collector = None
         self.etw_primary = None
         self.etw_fallback_reason = None
+        self.active_collectors = []
         # 活跃进程表：用 GUID / 进程序号做键，供父链查询与终止事件补全
         try:
             from collect.proctree import ProcessTable
@@ -295,34 +314,44 @@ class MonitorService:
                 )
                 self.backend = "legacy"
 
-        if not process_started:
-            self.monitor_threads.append(
-                threading.Thread(
-                    target=process_mon.p_mon,
-                    args=(self.stop_event, self.process_data, self.alert_queue),
-                    daemon=True,
-                )
-            )
+        collectors = plan_collectors(self.backend, process_started)
+        self.active_collectors = list(collectors)
 
-        # 其余模块暂时仍用原有采集器，随 P5~P8 逐步迁移
-        self.monitor_threads.extend(
-            [
-                threading.Thread(target=file_mon.f_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-                threading.Thread(target=network_mon.n_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-                threading.Thread(target=registry_mon.r_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-                threading.Thread(target=audit_mon.audit_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-                threading.Thread(target=asset_mon.asset_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True),
-            ]
-        )
+        factories = {
+            "process": lambda: threading.Thread(
+                target=process_mon.p_mon,
+                args=(self.stop_event, self.process_data, self.alert_queue),
+                daemon=True,
+            ),
+            "file": lambda: threading.Thread(
+                target=file_mon.f_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True
+            ),
+            "network": lambda: threading.Thread(
+                target=network_mon.n_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True
+            ),
+            "registry": lambda: threading.Thread(
+                target=registry_mon.r_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True
+            ),
+            "audit": lambda: threading.Thread(
+                target=audit_mon.audit_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True
+            ),
+            "asset": lambda: threading.Thread(
+                target=asset_mon.asset_mon, args=(self.stop_event, {}, self.alert_queue), daemon=True
+            ),
+        }
+
+        for name in collectors:
+            self.monitor_threads.append(factories[name]())
 
         for thread in self.monitor_threads:
             thread.start()
 
         self.running = True
         logging.info(
-            "MonitorService 已启动 (后端=%s, 进程采集=%s)",
+            "MonitorService 已启动 (后端=%s, 进程采集=%s, 采集器=%s)",
             self.backend,
             "etw" if process_started else "legacy",
+            ",".join(collectors),
         )
 
     def _shutdown(self, reset_start_time, message):
@@ -366,6 +395,7 @@ class MonitorService:
             "backend": self.backend,
             "etw_primary": self.etw_primary,
             "etw_fallback_reason": self.etw_fallback_reason,
+            "active_collectors": list(self.active_collectors),
         }
         if self.etw_collector is not None:
             try:
