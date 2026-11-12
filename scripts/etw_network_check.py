@@ -86,6 +86,11 @@ def main():
         stats = collector.stats()
         print()
         print(f"采集统计: handled={stats.get('handled')}  解码异常={stats.get('decode_errors')}")
+        consumer = stats.get("consumer") or {}
+        print(
+            f"消费者: 记录={consumer.get('records')} 缓冲={consumer.get('buffers')} "
+            f"回调异常={consumer.get('errors')}"
+        )
         counts = stats.get("event_counts") or {}
         if counts:
             print("按「提供者#事件ID」统计:")
