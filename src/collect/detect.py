@@ -18,10 +18,21 @@ PRIVATE_PREFIXES = config.PRIVATE_PREFIXES
 
 
 def is_public_address(address):
-    """判断是否为公网地址。内网与回环不算外部连接。"""
+    """判断是否为公网地址。内网、回环与 IPv6 本地地址都不算外部连接。"""
     if not address:
         return False
-    return not str(address).startswith(PRIVATE_PREFIXES)
+    text = str(address).strip().lower()
+    if text == "::1" or text.startswith("fe80:") or text.startswith("fc") or text.startswith("fd"):
+        return False
+    return not text.startswith(PRIVATE_PREFIXES)
+
+
+def format_endpoint(address, port):
+    """拼成 host:port；IPv6 需要加方括号，否则冒号会混淆。"""
+    host = str(address or "")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{host}:{port}"
 
 
 def classify_network(event):

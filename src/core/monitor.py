@@ -142,7 +142,7 @@ class MonitorService:
         del changes[200:]
 
     def _handle_network_event(self, event):
-        from collect.detect import classify_network
+        from collect.detect import classify_network, format_endpoint
 
         kind, reason, severity = classify_network(event)
         parent = self.process_table.latest_by_pid(event.ppid) if event.ppid else None
@@ -152,8 +152,8 @@ class MonitorService:
                 "%Y-%m-%d %H:%M:%S", time.localtime(event.timestamp_seconds())
             ),
             "pid": event.pid,
-            "local": f"{event.saddr}:{event.sport}",
-            "remote": f"{event.daddr}:{event.dport}",
+            "local": format_endpoint(event.saddr, event.sport),
+            "remote": format_endpoint(event.daddr, event.dport),
             "status": event.proto or "connect",
             "type": kind,
             "reason": reason,

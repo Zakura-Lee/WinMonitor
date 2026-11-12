@@ -45,6 +45,7 @@ class EtwCollector:
         self._running = threading.Event()
         self.decode_errors = 0
         self.handled = 0
+        self.skipped_unknown = 0
         self._consumer_snapshot = None
         self.disabled_providers = []
         # 按 (提供者, 事件ID) 统计，便于判断「没收到」还是「没产生」
@@ -138,6 +139,10 @@ class EtwCollector:
             except Exception:  # noqa: BLE001
                 self.decode_errors += 1
                 continue
+            if not event.provider:
+                # ETW 会周期性投递会话自带的元数据事件（提供者为全零），直接丢弃
+                self.skipped_unknown += 1
+                continue
             self.handled += 1
             self.event_counts[(event.provider, event.event_id)] += 1
             if self._on_event is not None:
@@ -153,6 +158,7 @@ class EtwCollector:
             "bus": self.bus.stats(),
             "handled": self.handled,
             "decode_errors": self.decode_errors,
+            "skipped_unknown": self.skipped_unknown,
         }
         if self._consumer is not None:
             result["consumer"] = {

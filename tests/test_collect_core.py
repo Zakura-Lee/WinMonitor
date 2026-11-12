@@ -231,7 +231,7 @@ def test_decode_loop_drains_pending():
         collector.bus.put(
             RawEvent(
                 ts_ns=0,
-                provider_id=b"\x00" * 16,
+                provider_id=providers.guid_bytes(providers.SYSMON.guid),
                 event_id=3,
                 level=4,
                 keyword=0x20,
@@ -244,6 +244,50 @@ def test_decode_loop_drains_pending():
     collector._decode_loop()
     assert len(seen) == 3
     assert collector.bus.qsize() == 0
+
+
+def test_decode_loop_skips_unknown_provider():
+    """提供者为全零的会话元数据事件应被丢弃，不能污染统计。"""
+    from collect.collector import EtwCollector
+
+    seen = []
+    collector = EtwCollector(session_name="SkipTest", on_event=seen.append)
+    collector.bus.put(
+        RawEvent(
+            ts_ns=0,
+            provider_id=b"\x00" * 16,
+            event_id=0,
+            level=0,
+            keyword=0,
+            pid=0,
+            tid=0,
+            payload=b"",
+        )
+    )
+    collector._decode_loop()
+    assert seen == []
+    assert collector.skipped_unknown == 1
+    assert collector.handled == 0
+
+
+def test_format_endpoint():
+    from collect.detect import format_endpoint
+
+    assert format_endpoint("8.8.8.8", 53) == "8.8.8.8:53"
+    assert format_endpoint("240e:460:8f0::22", 443) == "[240e:460:8f0::22]:443"
+    assert format_endpoint("", 0) == ":0"
+
+
+def test_is_public_address_variants():
+    from collect.detect import is_public_address
+
+    assert is_public_address("8.8.8.8")
+    assert not is_public_address("192.168.1.1")
+    assert not is_public_address("10.0.0.5")
+    assert not is_public_address("127.0.0.1")
+    assert not is_public_address("::1")
+    assert not is_public_address("fe80::1234")
+    assert not is_public_address("")
 
 
 def test_classify_network():
