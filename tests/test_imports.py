@@ -30,6 +30,8 @@ MODULES = [
     "collect.normalize",
     "collect.collector",
     "collect.proctree",
+    "collect.asset",
+    "collect.detect",
     "collect.etw.providers",
     "collect.etw.session",
     "collect.etw.consumer",
