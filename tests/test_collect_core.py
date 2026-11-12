@@ -282,6 +282,10 @@ def test_classify_file():
     assert severity == "critical"
     assert "可执行扩展" in reason
 
+    # 非可执行文件落在临时目录只记录、不告警，避免淹没有效信号
+    note = Event(ts_ns=0, path=r"C:\Users\a\AppData\Local\Temp\notes.txt")
+    assert classify_file(note)[0] == "normal"
+
     benign = Event(ts_ns=0, path=r"D:\work\notes.txt")
     assert classify_file(benign)[0] == "normal"
 

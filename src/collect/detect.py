@@ -63,8 +63,9 @@ def classify_network(event):
 def classify_file(event, action="created"):
     """对一次文件写入/删除给出分类结果。
 
-    评分思路沿用旧文件监控：可执行扩展、敏感路径、临时目录三项加权，
-    落在信任目录下的操作直接放行。
+    只有「可执行扩展名」才可能升级为 danger：临时目录里的 .txt/.log
+    在真实系统上量极大，若也告警会把有效信号淹没。
+    敏感路径与临时目录作为加重项，决定 warning 还是 critical。
     """
     path = event.path
     if not path:
@@ -74,10 +75,10 @@ def classify_file(event, action="created"):
         return "normal", "信任路径", None
 
     normalized = str(path).lower().replace("/", "\\")
-    score = 0
-    reasons = []
-
     extension = os.path.splitext(normalized)[1]
+
+    reasons = []
+    score = 0
     if extension in DANGEROUS_EXTENSIONS:
         score += 2
         reasons.append(f"可执行扩展 {extension}")
@@ -90,7 +91,8 @@ def classify_file(event, action="created"):
         score += 1
         reasons.append("临时目录")
 
-    if score < FILE_SCORE_THRESHOLD:
+    if score < FILE_SCORE_THRESHOLD or extension not in DANGEROUS_EXTENSIONS:
+        # 非可执行文件落地只记录不告警
         return "normal", "；".join(reasons) or "常规文件操作", None
 
     severity = "critical" if score >= 3 else "warning"
