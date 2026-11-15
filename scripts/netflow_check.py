@@ -104,6 +104,19 @@ def main(argv=None):
         print()
         print(f"netflow 统计: {status.get('netflow')}")
         print(f"event_store : {status.get('event_store')}")
+
+        collector_stats = None
+        if service.etw_collector is not None:
+            collector_stats = service.etw_collector.stats()
+        if collector_stats:
+            print()
+            print(f"采集 handled={collector_stats.get('handled')} "
+                  f"解码异常={collector_stats.get('decode_errors')}")
+            print(f"总线: {collector_stats.get('bus')}")
+            print(f"会话: {collector_stats.get('session')}")
+            counts = collector_stats.get("event_counts") or {}
+            net = {k: v for k, v in counts.items() if "Network" in k}
+            print(f"内核网络事件分布: {net}")
     finally:
         service.stop()
 

@@ -142,10 +142,16 @@ def summarize(entry, reason="idle"):
     }
 
 
+def _is_loopback(address):
+    text = str(address or "")
+    return text.startswith("127.") or text == "::1" or text in ("0.0.0.0", "")
+
+
 class FlowAggregator:
-    def __init__(self, window_seconds=15.0, max_flows=20000, local_ips=None):
+    def __init__(self, window_seconds=15.0, max_flows=20000, local_ips=None, skip_loopback=True):
         self.window_ns = int(window_seconds * 1e9)
         self.max_flows = max(1, max_flows)
+        self.skip_loopback = skip_loopback
         self._flows = collections.OrderedDict()
         self._lock = threading.Lock()
         self.local_ips = set(local_ips or ())
@@ -153,6 +159,7 @@ class FlowAggregator:
         self.emitted = 0
         self.evicted = 0
         self.filtered = 0
+        self.loopback_dropped = 0
 
     def set_local_ips(self, addresses):
         self.local_ips = {str(a) for a in addresses if a}
@@ -162,6 +169,10 @@ class FlowAggregator:
     def add(self, ts_ns, src, sport, dst, dport, size, pid=0, close=False):
         if not src or not dst:
             self.filtered += 1
+            return
+        # 回环流量没有检测价值且量极大，默认丢弃
+        if self.skip_loopback and (_is_loopback(src) or _is_loopback(dst)):
+            self.loopback_dropped += 1
             return
 
         endpoint_a = (src, sport)
@@ -226,6 +237,7 @@ class FlowAggregator:
             "emitted": self.emitted,
             "evicted": self.evicted,
             "filtered": self.filtered,
+            "loopback_dropped": self.loopback_dropped,
         }
 
 
@@ -238,6 +250,10 @@ class FlowMonitor:
         self.interval = max(1.0, window_seconds / 3)
         self._stop = threading.Event()
         self._thread = None
+        # 诊断计数：判断「没收到包」还是「收到但 size 为 0」
+        self.events = 0
+        self.events_with_size = 0
+        self.bytes_total = 0
 
     def start(self):
         if self._thread is not None:
@@ -270,6 +286,10 @@ class FlowMonitor:
         extra = getattr(event, "extra", None)
         if isinstance(extra, dict):
             size = extra.get("size") or 0
+        self.events += 1
+        if size:
+            self.events_with_size += 1
+            self.bytes_total += int(size)
         self.aggregator.add(
             ts_ns=event.ts_ns,
             src=event.saddr,
@@ -282,4 +302,12 @@ class FlowMonitor:
         )
 
     def stats(self):
-        return self.aggregator.stats()
+        result = self.aggregator.stats()
+        result.update(
+            {
+                "events": self.events,
+                "events_with_size": self.events_with_size,
+                "bytes_total": self.bytes_total,
+            }
+        )
+        return result
