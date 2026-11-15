@@ -150,7 +150,7 @@ def enable_data_stats(local_ip, local_port, remote_ip, remote_port):
 
 
 def read_data_stats(local_ip, local_port, remote_ip, remote_port):
-    """读取单个连接的收发统计，返回 dict 或 None。"""
+    """读取单个连接的收发统计，返回 (dict, 返回码)。"""
     row = MIB_TCPROW()
     row.dwState = 5  # MIB_TCP_STATE_ESTAB
     row.dwLocalAddr = _addr_to_int(local_ip)
@@ -167,13 +167,18 @@ def read_data_stats(local_ip, local_port, remote_ip, remote_port):
         ctypes.byref(data), 0, ctypes.sizeof(data),  # Rod（只读动态）
     )
     if result != NO_ERROR:
-        return None
-    return {
-        "bytes_out": data.DataBytesOut,
-        "bytes_in": data.DataBytesIn,
-        "segs_out": data.DataSegsOut,
-        "segs_in": data.DataSegsIn,
-    }
+        return None, result
+    return (
+        {
+            "bytes_out": data.DataBytesOut,
+            "bytes_in": data.DataBytesIn,
+            "segs_out": data.DataSegsOut,
+            "segs_in": data.DataSegsIn,
+            "thru_acked": data.ThruBytesAcked,
+            "thru_received": data.ThruBytesReceived,
+        },
+        result,
+    )
 
 
 def main():
@@ -210,6 +215,11 @@ def main():
             print("[STOP] GetExtendedTcpTable 没有列出这条连接")
             return 5
 
+        # 先启用采集，再发数据，否则统计只从启用那一刻开始计
+        rc = enable_data_stats(local_ip, local_port, remote_ip, remote_port)
+        print(f"[INFO] 启用采集返回码 = {rc}"
+              f"{'（0=成功）' if rc == 0 else '（5=拒绝访问，其它见 Win32 错误码）'}")
+
         payload = b"Z" * 4096
         sent = 0
         try:
@@ -219,20 +229,30 @@ def main():
             print(f"[INFO] 发送中断: {exc}")
         print(f"[INFO] 已发送 {sent} 字节")
 
-        rc = enable_data_stats(local_ip, local_port, remote_ip, remote_port)
-        print(f"[INFO] 启用采集返回码 = {rc}"
-              f"{'（0=成功）' if rc == 0 else '（5=拒绝访问，其它见 Win32 错误码）'}")
-        time.sleep(0.5)
-        stats = read_data_stats(local_ip, local_port, remote_ip, remote_port)
-        print(f"[INFO] 连接统计: {stats}")
+        stats = None
+        last_rc = None
+        for attempt in range(4):
+            time.sleep(0.4)
+            stats, last_rc = read_data_stats(local_ip, local_port, remote_ip, remote_port)
+            print(f"[INFO] 第 {attempt + 1} 次读取: 返回码={last_rc}  统计={stats}")
+            if stats is not None:
+                break
 
-        if stats and stats["bytes_out"] >= sent:
+        if stats is None:
             print()
-            print("结论: EStats 可用，字节数与实际发送量一致，可作为精确计数源。")
+            print(f"[STOP] 读取失败，返回码 {last_rc}")
+            print("       常见返回码: 87=参数错误  122=缓冲区不足  50=不支持")
+            return 6
+
+        print()
+        print(f"[INFO] 实际发送 {sent} 字节，统计报告发送 {stats['bytes_out']} 字节")
+        if stats["bytes_out"] > 0:
+            print()
+            print("结论: EStats 可用，可作为精确计数源。")
             return 0
         print()
-        print("结论: 接口调用成功但数值不可用，需要换方案。")
-        return 6
+        print("结论: 接口通了但计数为 0，可能需在连接建立时就启用。")
+        return 7
     finally:
         try:
             client.close()
