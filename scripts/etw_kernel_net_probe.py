@@ -151,18 +151,22 @@ def main(argv=None):
     # 每个事件 ID 的字节总量：哪个 ID 拿到了 4MB，哪个就是「发出」方向
     print()
     print("按事件 ID 统计字节量:")
-    local = 2854367498  # 占位，仅用于提示，实际按 10.x 前缀判断
+
+    # 出现次数最多的 saddr 基本就是本机地址，用它判断「本机在前」的比例
+    saddr_counter = collections.Counter(
+        (raw.decoded or {}).get("saddr") for raw in records
+    )
+    common_saddr = saddr_counter.most_common(1)[0][0] if saddr_counter else None
+
     for event_id in sorted(per_id):
         related = [raw for raw in records if raw.event_id == event_id]
         total_size = sum(int((raw.decoded or {}).get("size") or 0) for raw in related)
         local_first = sum(
-            1
-            for raw in related
-            if str((raw.decoded or {}).get("saddr", "")) == str(local)
+            1 for raw in related if (raw.decoded or {}).get("saddr") == common_saddr
         )
         print(
             f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  "
-            f"字节 {total_size:>10}  本机在前的比例 {local_first}/{len(related)}"
+            f"字节 {total_size:>10}  本机在前 {local_first}/{len(related)}"
         )
 
     hints = [n for n in all_fields if any(k in n.lower() for k in ("size", "byte", "length", "count"))]
