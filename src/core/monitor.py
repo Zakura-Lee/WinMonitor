@@ -53,6 +53,7 @@ class MonitorService:
         self.event_store = None
         self.flow_monitor = None
         self.network_flows = []
+        self.net_model = None
         # 活跃进程表：用 GUID / 进程序号做键，供父链查询与终止事件补全
         try:
             from collect.proctree import ProcessTable
@@ -135,10 +136,61 @@ class MonitorService:
         except Exception:  # noqa: BLE001
             logging.debug("初始化流聚合失败", exc_info=True)
             self.flow_monitor = None
+
+        # 网络入侵模型：纯标准库推理，模型缺失时静默跳过
+        if getattr(config, "NET_ML_ENABLED", True):
+            try:
+                from detect.netmodel import load_model
+
+                self.net_model = load_model(
+                    getattr(config, "NET_ML_MODEL_PATH", None) or None
+                )
+                if self.net_model is not None:
+                    logging.info(
+                        "网络模型已加载: %d 棵树, 阈值 %.2f",
+                        self.net_model.n_trees,
+                        getattr(config, "NET_ML_THRESHOLD", 0.94),
+                    )
+                else:
+                    logging.info("未找到网络模型文件，跳过模型打分")
+            except Exception:  # noqa: BLE001
+                logging.debug("加载网络模型失败", exc_info=True)
+                self.net_model = None
         return True
 
     def _on_flow(self, record):
-        """流聚合产出的特征记录：进内存列表并落盘。"""
+        """流聚合产出的特征记录：可选的模型打分，然后进内存列表并落盘。"""
+        if self.net_model is not None:
+            try:
+                from detect.netmodel import score_flow
+
+                result = score_flow(
+                    record,
+                    model=self.net_model,
+                    threshold=getattr(config, "NET_ML_THRESHOLD", 0.94),
+                )
+            except Exception:  # noqa: BLE001
+                result = None
+            if result:
+                record["ml_probability"] = result["probability"]
+                record["ml_attack"] = result["is_attack"]
+                if result["is_attack"]:
+                    try:
+                        self.alert_queue.put_nowait(
+                            {
+                                "category": "network",
+                                "title": "网络行为异常",
+                                "message": (
+                                    f"{record.get('src')}:{record.get('sport')} -> "
+                                    f"{record.get('dst')}:{record.get('dport')} "
+                                    f"攻击概率 {result['probability']:.3f}"
+                                ),
+                                "severity": "warning",
+                            }
+                        )
+                    except queue.Full:
+                        logging.debug("告警队列已满，丢弃模型告警")
+
         self.network_flows.insert(0, record)
         del self.network_flows[500:]
         if self.event_store is not None:
@@ -479,6 +531,11 @@ class MonitorService:
             result["event_store"] = self.event_store.stats()
         if self.flow_monitor is not None:
             result["netflow"] = self.flow_monitor.stats()
+        if self.net_model is not None:
+            result["net_model"] = {
+                "trees": self.net_model.n_trees,
+                "threshold": getattr(config, "NET_ML_THRESHOLD", 0.94),
+            }
         if self.process_table is not None:
             result["process_table"] = self.process_table.stats()
         return result

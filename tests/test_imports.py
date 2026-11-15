@@ -35,6 +35,7 @@ MODULES = [
     "collect.store",
     "collect.netflow",
     "detect.features",
+    "detect.netmodel",
     "collect.etw.providers",
     "collect.etw.session",
     "collect.etw.consumer",

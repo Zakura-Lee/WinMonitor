@@ -444,6 +444,11 @@ EVENT_STORE_MAX_PER_HOUR = 200000
 # 网络流聚合窗口（秒）：一条流空闲超过该时长即输出
 NETFLOW_WINDOW_SECONDS = 15.0
 
+# 网络入侵模型（P9b）
+NET_ML_ENABLED = os.environ.get("WINMON_NET_ML", "1") != "0"
+NET_ML_THRESHOLD = float(os.environ.get("WINMON_NET_ML_THRESHOLD", "0.94"))
+NET_ML_MODEL_PATH = os.path.join(_PROJECT_ROOT, "data", "models", "net_model.json.gz")
+
 # LLM 复核层（P9c 起使用）
 LLM_PROVIDER = "deepseek"
 LLM_BASE_URL = os.environ.get("WINMON_LLM_BASE_URL", "https://api.deepseek.com")
