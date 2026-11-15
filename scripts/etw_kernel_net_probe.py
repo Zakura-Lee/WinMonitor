@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Kernel-Network 字段探针（需管理员权限）
+Kernel-Network 字段与方向探针（需管理员权限）
 
-路线 A 的前提是「内核网络事件能提供 CICIDS 那类流特征（字节数、包长）」。
-本脚本订阅 Microsoft-Windows-Kernel-Network，对所有事件做逐字段解码，
-把真实字段名和值打印出来，用来判断这个前提是否成立。
+回答两个问题:
+    1. 内核网络事件是否带字节数（决定网络 ML 用哪套特征）
+    2. 哪个 EventID 承载「发出」、哪个承载「接收」
+
+方向判定用「两阶段对照」：先用局域网 IP 建本机服务器，
+阶段 A 客户端单向发 1MB，阶段 B 服务器单向发 1MB，
+分别统计各事件 ID 的字节增量——暴涨的那个 ID 就是该方向的载体。
+
+用局域网 IP 而不是 127.0.0.1，避免被回环过滤掉。
 
 用法（管理员）:
-    python scripts/etw_kernel_net_probe.py --seconds 8
+    python scripts/etw_kernel_net_probe.py --seconds 6
 """
 
 import argparse
@@ -26,90 +32,117 @@ from collect.etw import api, providers
 from collect.etw.consumer import EtwConsumer
 from collect.etw.session import EtwSession
 
-TARGETS = [("8.8.8.8", 53), ("223.5.5.5", 443), ("1.1.1.1", 443)]
+CHUNK = 65536
+PAYLOAD = 1024 * 1024  # 每阶段 1MB
 
 
-def _traffic():
-    for host, port in TARGETS:
-        threading.Thread(
-            target=lambda h=host, p=port: _connect(h, p), daemon=True
-        ).start()
-    _bulk_public_transfer()
-
-
-def _connect(host, port):
+def detect_local_ip():
+    """用一个不会真正发包的 UDP 连接拿到默认出口地址。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock = socket.create_connection((host, port), timeout=2)
-        sock.sendall(b"x" * 64)
+        sock.connect(("8.8.8.8", 53))
+        return sock.getsockname()[0]
+    except OSError:
+        return socket.gethostbyname(socket.gethostname())
+    finally:
         sock.close()
+
+
+def _send_all(sock, total):
+    chunk = b"C" * CHUNK
+    sent = 0
+    try:
+        sock.settimeout(5)
+        while sent < total:
+            sent += sock.send(chunk[: min(CHUNK, total - sent)])
     except OSError:
         pass
+    return sent
 
 
-def _bulk_public_transfer():
-    """向公网单向发送 4MB，用于判断哪个 EventID 承载「发出」字节。
+def _read_all(sock, total):
+    received = 0
+    try:
+        sock.settimeout(5)
+        while received < total:
+            data = sock.recv(CHUNK)
+            if not data:
+                break
+            received += len(data)
+    except OSError:
+        pass
+    return received
 
-    回环测试分不清方向（两端都在本机），必须走外网：
-    发出的字节会集中落在「发送」那一个事件 ID 上。
-    """
-    data = b"B" * 65536
-    for host, port in (("1.1.1.1", 443), ("223.5.5.5", 443)):
+
+def directional_test(per_id_bytes, local_ip):
+    """两阶段对照，返回 {阶段: {事件ID: 字节增量}}。"""
+    results = {}
+
+    for phase in ("upload", "download"):
+        before = dict(per_id_bytes)
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock = socket.create_connection((host, port), timeout=3)
-        except OSError as exc:
-            print(f"  {host}:{port} 连接失败: {exc}")
-            continue
-        sent = 0
-        try:
-            sock.settimeout(2)
-            for _ in range(64):  # 最多 4MB
-                sent += sock.send(data)
-        except OSError:
-            pass
-        finally:
+            server.bind((local_ip, 0))
+            server.listen(1)
+            port = server.getsockname()[1]
+
+            client = socket.create_connection((local_ip, port), timeout=5)
+            peer, _ = server.accept()
+
+            if phase == "upload":
+                # 客户端发，服务器读
+                reader = threading.Thread(target=_read_all, args=(peer, PAYLOAD))
+                reader.start()
+                sent = _send_all(client, PAYLOAD)
+                reader.join(timeout=10)
+                print(f"  阶段 A(上传): 客户端发送 {sent} 字节")
+            else:
+                # 服务器发，客户端读
+                sender = threading.Thread(target=_send_all, args=(peer, PAYLOAD))
+                sender.start()
+                received = _read_all(client, PAYLOAD)
+                sender.join(timeout=10)
+                print(f"  阶段 B(下载): 客户端接收 {received} 字节")
+
+            time.sleep(0.6)
+            after = dict(per_id_bytes)
+            results[phase] = {
+                event_id: after.get(event_id, 0) - before.get(event_id, 0)
+                for event_id in set(before) | set(after)
+            }
             try:
-                sock.close()
+                client.close()
             except OSError:
                 pass
-        print(f"  {host}:{port} 单向发送 {sent} 字节")
-        if sent > 0:
-            return
+            try:
+                peer.close()
+            except OSError:
+                pass
+        finally:
+            server.close()
+
+    return results
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Kernel-Network 字段探针")
-    parser.add_argument("--seconds", type=float, default=8.0)
+    parser = argparse.ArgumentParser(description="Kernel-Network 字段与方向探针")
+    parser.add_argument("--seconds", type=float, default=6.0, help="收尾观察时间")
     args = parser.parse_args(argv)
 
     if not api.IsUserAnAdmin():
         print("[FAIL] 需要管理员权限")
         return 2
 
-    records = []
     per_id = collections.Counter()
-    # 字节量必须在回调里累积：records 只留前 200 条用于打印，
-    # 从截断列表求和会得到错误的字节总量。
     per_id_bytes = collections.Counter()
-    per_id_local_first = collections.Counter()
-    flow_bytes = collections.Counter()          # 五元组 -> 总字节
-    flow_id_bytes = collections.Counter()       # (五元组, 事件ID) -> 字节
+    records = []
 
     def sink(raw):
         fields = raw.decoded or {}
         size = int(fields.get("size") or 0)
-        sid = raw.event_id
-        per_id[sid] += 1
-        per_id_bytes[sid] += size
-
-        key = (
-            fields.get("saddr"),
-            fields.get("sport"),
-            fields.get("daddr"),
-            fields.get("dport"),
-        )
-        flow_bytes[key] += size
-        flow_id_bytes[(key, sid)] += size
-
+        per_id[raw.event_id] += 1
+        per_id_bytes[raw.event_id] += size
         if len(records) < 400:
             records.append(raw)
 
@@ -120,93 +153,67 @@ def main(argv=None):
     consumer = EtwConsumer("WinMonitorKernelNet", sink, decode_all=True)
     consumer.start()
 
-    print(f"[INFO] 订阅 {providers.KERNEL_NETWORK.name}，采集 {args.seconds}s 并制造流量 ...")
-    threading.Thread(target=_traffic, daemon=True).start()
+    local_ip = detect_local_ip()
+    print(f"[INFO] 本机地址 = {local_ip}")
+    print("[INFO] 开始两阶段方向对照（各 1MB）...")
+    time.sleep(1.0)
+
+    results = directional_test(per_id_bytes, local_ip)
+
+    print(f"[INFO] 收尾观察 {args.seconds}s ...")
     time.sleep(args.seconds)
 
     consumer.stop()
     session.stop()
 
     print()
-    print("=" * 62)
-    print(f"事件总数 : {sum(per_id.values())}")
-    print(f"事件分布 : {dict(per_id)}")
+    print("=" * 66)
+    print(f"事件总数 : {sum(per_id.values())}   分布: {dict(per_id)}")
     print(f"消费者   : records={consumer.record_count} buffers={consumer.buffer_count} "
           f"errors={consumer.error_count}")
 
-    # 按事件 ID 各取一条「非回环」事件，打印全部字段
-    # 回环事件的地址两端都是 127.0.0.1，看不出方向与端口语义
-    LOOPBACK = 16777343  # 0x0100007F
-    seen = set()
-    printed = 0
-    for raw in records:
-        fields = raw.decoded or {}
-        saddr, daddr = fields.get("saddr"), fields.get("daddr")
-        if saddr == LOOPBACK or daddr == LOOPBACK:
+    print()
+    print("阶段字节增量（单位: 字节）:")
+    header = "    ID   " + "".join(f"{phase:>12}" for phase in ("upload", "download"))
+    print(header)
+    all_ids = sorted(set(results["upload"]) | set(results["download"]) | set(per_id))
+    for event_id in all_ids:
+        up = results["upload"].get(event_id, 0)
+        down = results["download"].get(event_id, 0)
+        if up == 0 and down == 0:
             continue
+        print(f"    ID {event_id:>3} {up:>12} {down:>12}")
+
+    # 得出方向结论
+    up_best = max(results["upload"].items(), key=lambda kv: kv[1], default=(None, 0))
+    down_best = max(results["download"].items(), key=lambda kv: kv[1], default=(None, 0))
+    print()
+    print(f"上传阶段字节最多的事件 ID: {up_best[0]}（{up_best[1]} 字节）")
+    print(f"下载阶段字节最多的事件 ID: {down_best[0]}（{down_best[1]} 字节）")
+    if up_best[0] is not None and down_best[0] is not None and up_best[0] != down_best[0]:
+        print(f"结论: 发送 = ID {up_best[0]}，接收 = ID {down_best[0]}")
+    elif up_best[0] == down_best[0]:
+        print("结论: 两阶段落在同一个 ID 上，说明该 ID 不区分方向，需另找依据。")
+    else:
+        print("结论: 数据不足，无法判定方向。")
+
+    # 字段样例
+    print()
+    print("字段样例（每种事件 ID 一条）:")
+    seen = set()
+    for raw in records:
         if raw.event_id in seen:
             continue
         seen.add(raw.event_id)
-        printed += 1
-        print()
-        print(f"--- EventID {raw.event_id}  载荷 {len(raw.payload)} 字节 ---")
+        fields = raw.decoded or {}
+        if not fields:
+            continue
+        print(f"    --- EventID {raw.event_id} ---")
         for name in sorted(fields):
-            print(f"    {name:26s} = {fields[name]!r}")
-        if printed >= 6:
+            print(f"        {name:26s} = {fields[name]!r}")
+        if len(seen) >= 4:
             break
 
-    if printed == 0:
-        print()
-        print("(窗口内没有捕获到非回环事件——请确保有外网连接)")
-
-    print()
-    if not records:
-        print("结论: 没有收到任何 Kernel-Network 事件。")
-        return 7
-
-    all_fields = set()
-    for raw in records:
-        all_fields.update((raw.decoded or {}).keys())
-
-    # 每个事件 ID 的字节总量：哪个 ID 拿到了本次测试的字节，哪个就是「发出」
-    print()
-    print("按事件 ID 统计字节量（全量累积）:")
-    for event_id in sorted(per_id):
-        print(
-            f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  "
-            f"字节 {per_id_bytes[event_id]:>10}"
-        )
-
-    # 只看字节量最大的那条流，排除背景流量干扰
-    if flow_bytes:
-        top_key, top_bytes = flow_bytes.most_common(1)[0]
-        print()
-        print(f"字节量最大的一条流: {top_key}  共 {top_bytes} 字节")
-        for (key, event_id), size in sorted(flow_id_bytes.items(), key=lambda x: -x[1]):
-            if key != top_key:
-                continue
-            count = sum(
-                1
-                for raw in records
-                if raw.event_id == event_id
-                and (
-                    (raw.decoded or {}).get("saddr"),
-                    (raw.decoded or {}).get("sport"),
-                    (raw.decoded or {}).get("daddr"),
-                    (raw.decoded or {}).get("dport"),
-                )
-                == key
-            )
-            print(f"    ID {event_id:>3}  字节 {size:>10}  字节占比 {size / top_bytes * 100:.1f}%")
-
-    hints = [n for n in all_fields if any(k in n.lower() for k in ("size", "byte", "length", "count"))]
-    print(f"全部出现过的字段名: {sorted(all_fields)}")
-    print()
-    if hints:
-        print(f"结论: 存在可能表示流量大小的字段 -> {sorted(hints)}")
-        print("      路线 A 有希望，可基于这些字段构造流特征。")
-    else:
-        print("结论: 未发现字节数/包长类字段，路线 A 可能不成立。")
     return 0
 
 
