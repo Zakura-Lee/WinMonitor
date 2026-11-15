@@ -34,7 +34,7 @@ def _traffic():
         threading.Thread(
             target=lambda h=host, p=port: _connect(h, p), daemon=True
         ).start()
-    _bulk_local_transfer()
+    _bulk_public_transfer()
 
 
 def _connect(host, port):
@@ -46,31 +46,34 @@ def _connect(host, port):
         pass
 
 
-def _bulk_local_transfer():
-    """单向发送 512KB，用于判断哪个 EventID 承载「发出」方向的字节。"""
-    server = socket.socket()
-    try:
-        server.bind(("127.0.0.1", 0))
-        server.listen(1)
-        port = server.getsockname()[1]
-        client = socket.create_connection(("127.0.0.1", port), timeout=3)
-        peer, _ = server.accept()
+def _bulk_public_transfer():
+    """向公网单向发送 4MB，用于判断哪个 EventID 承载「发出」字节。
 
-        chunk = b"A" * 8192
+    回环测试分不清方向（两端都在本机），必须走外网：
+    发出的字节会集中落在「发送」那一个事件 ID 上。
+    """
+    data = b"B" * 65536
+    for host, port in (("1.1.1.1", 443), ("223.5.5.5", 443)):
+        try:
+            sock = socket.create_connection((host, port), timeout=3)
+        except OSError as exc:
+            print(f"  {host}:{port} 连接失败: {exc}")
+            continue
         sent = 0
         try:
-            for _ in range(64):  # 64 * 8KB = 512KB
-                sent += client.send(chunk)
+            sock.settimeout(2)
+            for _ in range(64):  # 最多 4MB
+                sent += sock.send(data)
         except OSError:
             pass
-        print(f"  单向发送完成: {sent} 字节")
-        time.sleep(0.3)
-        peer.close()
-        client.close()
-    except OSError as exc:
-        print(f"  单向发送失败: {exc}")
-    finally:
-        server.close()
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        print(f"  {host}:{port} 单向发送 {sent} 字节")
+        if sent > 0:
+            return
 
 
 def main(argv=None):
@@ -145,16 +148,22 @@ def main(argv=None):
     for raw in records:
         all_fields.update((raw.decoded or {}).keys())
 
-    # 每个事件 ID 的字节总量：哪个 ID 拿到了 512KB，哪个就是「发出」方向
+    # 每个事件 ID 的字节总量：哪个 ID 拿到了 4MB，哪个就是「发出」方向
     print()
     print("按事件 ID 统计字节量:")
+    local = 2854367498  # 占位，仅用于提示，实际按 10.x 前缀判断
     for event_id in sorted(per_id):
-        total_size = sum(
-            int((raw.decoded or {}).get("size") or 0)
-            for raw in records
-            if raw.event_id == event_id
+        related = [raw for raw in records if raw.event_id == event_id]
+        total_size = sum(int((raw.decoded or {}).get("size") or 0) for raw in related)
+        local_first = sum(
+            1
+            for raw in related
+            if str((raw.decoded or {}).get("saddr", "")) == str(local)
         )
-        print(f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  字节 {total_size:>10}")
+        print(
+            f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  "
+            f"字节 {total_size:>10}  本机在前的比例 {local_first}/{len(related)}"
+        )
 
     hints = [n for n in all_fields if any(k in n.lower() for k in ("size", "byte", "length", "count"))]
     print(f"全部出现过的字段名: {sorted(all_fields)}")
