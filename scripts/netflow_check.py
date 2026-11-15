@@ -99,11 +99,19 @@ def main(argv=None):
                 f"sbytes={flow['sbytes']} dbytes={flow['dbytes']} "
                 f"dur={flow['dur_ms']}ms rate={flow['rate_bps']}bps"
             )
+            if "ml_probability" in flow:
+                flag = "攻击" if flow.get("ml_attack") else "正常"
+                print(
+                    f"        模型评分={flow['ml_probability']:.4f} 判定={flag}"
+                )
+            else:
+                print("        模型评分: 未打分（模型未加载或已禁用）")
 
         status = service.status()
         print()
         print(f"netflow 统计: {status.get('netflow')}")
         print(f"event_store : {status.get('event_store')}")
+        print(f"net_model   : {status.get('net_model')}")
 
         collector_stats = None
         if service.etw_collector is not None:
