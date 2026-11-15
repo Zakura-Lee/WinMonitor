@@ -55,6 +55,31 @@ def event_to_record(event):
     return values
 
 
+# 落盘白名单：(提供者, 事件ID)；事件 ID 为 None 表示该提供者全部收。
+# 线程启动/映像加载这类高频噪声不进库，否则一小时几十万行且没有分析价值。
+STORED_EVENTS = {
+    ("Microsoft-Windows-Sysmon", 1),    # ProcessCreate
+    ("Microsoft-Windows-Sysmon", 3),    # NetworkConnect
+    ("Microsoft-Windows-Sysmon", 5),    # ProcessTerminate
+    ("Microsoft-Windows-Sysmon", 11),   # FileCreate
+    ("Microsoft-Windows-Sysmon", 12),   # RegistryCreateDelete
+    ("Microsoft-Windows-Sysmon", 13),   # RegistryValueSet
+    ("Microsoft-Windows-Sysmon", 14),   # RegistryRename
+    ("Microsoft-Windows-Sysmon", 23),   # FileDelete
+    ("Microsoft-Windows-Kernel-Process", 1),   # ProcessStart
+    ("Microsoft-Windows-Kernel-Process", 2),   # ProcessStop
+    ("Microsoft-Windows-Kernel-Network", None),  # 网络流特征用，全收
+}
+
+
+def should_store(event):
+    provider = getattr(event, "provider", "")
+    event_id = getattr(event, "event_id", None)
+    if (provider, None) in STORED_EVENTS:
+        return True
+    return (provider, event_id) in STORED_EVENTS
+
+
 class EventStore:
     def __init__(self, root, retain_days=3, max_per_hour=200000, enabled=True):
         self.root = os.path.abspath(root)
@@ -69,6 +94,7 @@ class EventStore:
 
         self.written = 0
         self.dropped = 0
+        self.filtered = 0
         self.rotations = 0
 
         if self.enabled:
@@ -79,6 +105,9 @@ class EventStore:
 
     def write(self, event):
         if not self.enabled:
+            return False
+        if not should_store(event):
+            self.filtered += 1
             return False
         with self._lock:
             self._ensure_file()
@@ -170,5 +199,6 @@ class EventStore:
             "root": self.root,
             "written": self.written,
             "dropped": self.dropped,
+            "filtered": self.filtered,
             "rotations": self.rotations,
         }

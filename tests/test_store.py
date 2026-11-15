@@ -79,6 +79,27 @@ def test_store_disabled():
         shutil.rmtree(directory, ignore_errors=True)
 
 
+def test_store_filters_noise_events():
+    directory = tempfile.mkdtemp(prefix="wm_store_filter_")
+    try:
+        store = EventStore(directory)
+        thread_event = _event(
+            provider="Microsoft-Windows-Kernel-Process", event_id=3, pid=4
+        )
+        assert store.write(thread_event) is False
+        assert store.stats()["filtered"] == 1
+
+        net_event = _event(provider="Microsoft-Windows-Kernel-Network", event_id=10)
+        assert store.write(net_event) is True
+
+        process_event = _event(provider="Microsoft-Windows-Sysmon", event_id=1)
+        assert store.write(process_event) is True
+        assert store.stats()["written"] == 2
+        store.close()
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 def test_store_prunes_old_days():
     directory = tempfile.mkdtemp(prefix="wm_store_prune_")
     try:
