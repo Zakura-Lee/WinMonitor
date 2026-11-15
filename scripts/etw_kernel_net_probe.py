@@ -81,7 +81,7 @@ def main(argv=None):
         if len(records) < 200:
             records.append(raw)
 
-    session = EtwSession("WinMonitorKernelNet", buffer_size_kb=256, maximum_buffers=64)
+    session = EtwSession("WinMonitorKernelNet", buffer_size_kb=256, max_buffers=64)
     session.start()
     session.enable(providers.KERNEL_NETWORK)
 
