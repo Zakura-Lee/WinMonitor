@@ -61,10 +61,12 @@ class EtwConsumerError(RuntimeError):
 
 
 class EtwConsumer:
-    def __init__(self, session_name, sink, legacy=False):
+    def __init__(self, session_name, sink, legacy=False, decode_all=False):
         self.session_name = session_name
         self._sink = sink
         self._legacy = legacy
+        # 诊断用途：忽略白名单，对所有事件做逐字段解码（仅供探针脚本）
+        self._decode_all = decode_all
 
         self._logfile = None
         self._handle = types.TRACEHANDLE(0)
@@ -157,12 +159,18 @@ class EtwConsumer:
             )
 
             decoded = {}
-            wanted = _DECODE_EVENTS.get((provider_id, descriptor.Id), _NOT_DECODED)
-            if wanted is not _NOT_DECODED and properties:
+            if self._decode_all and properties:
                 try:
-                    decoded = tdh.decode_fields(record, properties, wanted)
+                    decoded = tdh.decode_fields(record, properties)
                 except Exception:  # noqa: BLE001
                     decoded = {}
+            else:
+                wanted = _DECODE_EVENTS.get((provider_id, descriptor.Id), _NOT_DECODED)
+                if wanted is not _NOT_DECODED and properties:
+                    try:
+                        decoded = tdh.decode_fields(record, properties, wanted)
+                    except Exception:  # noqa: BLE001
+                        decoded = {}
 
             raw = RawEvent(
                 ts_ns=(header.TimeStamp - FILETIME_EPOCH_DELTA) * 100,
