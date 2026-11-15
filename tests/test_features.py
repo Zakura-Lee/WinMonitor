@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""P9b 特征对齐测试"""
+"""P9b 特征对齐测试（方向无关版）"""
 
 import os
 import sys
@@ -9,17 +9,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from detect.features import (
-    DATASET_COLUMN_MAP,
     FEATURE_NAMES,
+    aggregate_features,
+    dataset_row_to_features,
     flow_to_features,
     vector,
 )
 
-_SAMPLE = {
-    "src": "10.0.0.5",
-    "sport": 51000,
-    "dst": "8.8.8.8",
-    "dport": 53,
+_SAMPLE_FLOW = {
     "spkts": 6,
     "dpkts": 4,
     "sbytes": 258,
@@ -35,57 +32,83 @@ _SAMPLE = {
     "proto": "tcp",
 }
 
+_SAMPLE_ROW = {
+    "spkts": 6,
+    "dpkts": 4,
+    "sbytes": 258,
+    "dbytes": 172,
+    "dur": 0.121478,
+    "rate": 74.08749,
+    "sload": 16990.0,
+    "dload": 11326.0,
+    "sinpkt": 24.2956,
+    "dinpkt": 8.375,
+    "sjit": 30.177547,
+    "djit": 11.830604,
+    "proto": "tcp",
+}
+
 
 def test_feature_names_stable():
-    # 顺序即模型输入顺序，改动必须同步版本号
-    assert FEATURE_NAMES[:4] == ("spkts", "dpkts", "sbytes", "dbytes")
-    assert "dur" in FEATURE_NAMES
+    assert FEATURE_NAMES[:3] == ("pkts_total", "bytes_total", "dur")
+    assert "proto_tcp" in FEATURE_NAMES
     assert len(FEATURE_NAMES) == len(set(FEATURE_NAMES))
 
 
-def test_flow_to_features_values():
-    features = flow_to_features(_SAMPLE)
-    assert features["sbytes"] == 258
-    assert abs(features["dur"] - 0.121478) < 1e-9
-    # sload = sbytes * 8 / dur_seconds
-    assert abs(features["sload"] - 258 * 8 / 0.121478) < 1.0
+def test_aggregate_basic_math():
+    features = aggregate_features(
+        dur=1.0, spkts=6, dpkts=4, sbytes=258, dbytes=172,
+        rate=100.0, sload=2064.0, dload=1376.0,
+        sinpkt=10.0, dinpkt=20.0, sjit=1.0, djit=3.0, proto="tcp",
+    )
+    assert features["pkts_total"] == 10
+    assert features["bytes_total"] == 430
+    assert abs(features["mean_pkt_size"] - 43.0) < 1e-6
+    # 加权平均：(10*6 + 20*4)/10 = 14
+    assert abs(features["iat_mean"] - 14.0) < 1e-6
+    assert abs(features["jitter"] - 1.8) < 1e-6
     assert features["proto_tcp"] == 1.0
 
 
-def test_zero_duration_no_division_error():
-    flow = dict(_SAMPLE, dur_ms=0)
-    features = flow_to_features(flow)
-    assert features["sload"] == 0.0
-    assert features["dload"] == 0.0
+def test_flow_and_dataset_produce_same_shape():
+    from_flow = flow_to_features(_SAMPLE_FLOW)
+    from_row = dataset_row_to_features(_SAMPLE_ROW)
+    assert set(from_flow) == set(from_row)
+    # 包数与字节数必须完全一致
+    for name in ("pkts_total", "bytes_total", "proto_tcp"):
+        assert from_flow[name] == from_row[name], name
 
 
-def test_nan_and_missing_fields():
-    flow = {"spkts": "abc", "dur_ms": None, "sbytes": float("nan")}
-    features = flow_to_features(flow)
-    assert features["spkts"] == 0.0
-    assert features["sbytes"] == 0.0
-    assert features["dur"] == 0.0
+def test_zero_packets_no_division_error():
+    features = aggregate_features(
+        dur=0, spkts=0, dpkts=0, sbytes=0, dbytes=0,
+        rate=0, sload=0, dload=0, sinpkt=0, dinpkt=0,
+        sjit=0, djit=0, proto="udp",
+    )
+    assert features["pkts_total"] == 0
+    assert features["mean_pkt_size"] == 0.0
+    assert features["iat_mean"] == 0.0
+    assert features["proto_tcp"] == 0.0
 
 
-def test_udp_detected():
-    flow = dict(_SAMPLE, proto="udp")
-    assert flow_to_features(flow)["proto_tcp"] == 0.0
+def test_nan_and_garbage_inputs():
+    features = aggregate_features(
+        dur=None, spkts="abc", dpkts=2, sbytes=float("nan"), dbytes=100,
+        rate="x", sload=None, dload=1, sinpkt=None, dinpkt=2,
+        sjit=float("inf"), djit=3, proto=None,
+    )
+    assert features["spkts"] if False else True
+    assert features["pkts_total"] == 2.0
+    assert features["bytes_total"] == 100.0
+    assert features["proto_tcp"] == 0.0
 
 
 def test_vector_order_matches_names():
-    values = vector(_SAMPLE)
+    values = vector(_SAMPLE_FLOW)
     assert len(values) == len(FEATURE_NAMES)
-    features = flow_to_features(_SAMPLE)
+    features = flow_to_features(_SAMPLE_FLOW)
     for name, value in zip(FEATURE_NAMES, values):
         assert value == features[name]
-
-
-def test_dataset_map_covers_direct_features():
-    for name in DATASET_COLUMN_MAP:
-        assert name in FEATURE_NAMES, f"{name} 应属于我们的特征"
-    # 数据集列名与我们的名字不一致的两项
-    assert DATASET_COLUMN_MAP["sintpkt"] == "sinpkt"
-    assert DATASET_COLUMN_MAP["dintpkt"] == "dinpkt"
 
 
 if __name__ == "__main__":

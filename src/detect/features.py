@@ -1,109 +1,132 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-网络流特征对齐
+网络流特征对齐（方向无关版）
 
-用途：把本项目采集到的流记录，映射成与 UNSW-NB15 同名的特征向量，
-这样公开数据集上训练出来的模型才能直接用到线上数据。
+背景：内核网络事件以「连接」为单位上报，本机地址始终出现在源端，
+无法可靠区分收发方向。与其猜事件 ID 语义，不如把特征降维成
+方向无关的聚合量，并在 UNSW-NB15 侧做同样的聚合。
 
-对齐原则：只使用两边都有的特征。
-数据集里有、我们采不到的（TCP 状态机、TTL、重传计数等）一律不进向量，
-宁可少几个特征，也不能在推理时编造数值。
+保证对称的做法：两侧都调用同一个 aggregate_features()，
+只是取数来源不同。任何一侧改了公式，另一侧自动跟随。
+
+特征清单与对应关系（UNSW-NB15 列名）:
+    pkts_total    = spkts + dpkts
+    bytes_total   = sbytes + dbytes
+    dur           = dur
+    rate          = rate
+    load_total    = sload + dload
+    mean_pkt_size = bytes_total / pkts_total
+    iat_mean      = (sinpkt*spkts + dinpkt*dpkts) / pkts_total
+    jitter        = (sjit*spkts + djit*dpkts) / pkts_total
+    proto_tcp     = proto == "tcp"
 """
 
-# 特征顺序即模型输入顺序，改动会影响已训练模型，必须同步版本号
-FEATURE_VERSION = 1
+# 特征顺序即模型输入顺序，改动必须同步版本号
+FEATURE_VERSION = 2
 
-# 直接对应 UNSW-NB15 列名的特征
-DIRECT_FEATURES = (
+FEATURE_NAMES = (
+    "pkts_total",
+    "bytes_total",
+    "dur",
+    "rate",
+    "load_total",
+    "mean_pkt_size",
+    "iat_mean",
+    "jitter",
+    "proto_tcp",
+)
+
+# 训练时要用到的数据集原始列
+DATASET_COLUMNS = (
+    "dur",
     "spkts",
     "dpkts",
     "sbytes",
     "dbytes",
-    "smean",
-    "dmean",
-    "sintpkt",
-    "dintpkt",
+    "rate",
+    "sload",
+    "dload",
+    "sinpkt",
+    "dinpkt",
     "sjit",
     "djit",
-    "rate",
+    "proto",
 )
 
-# 由基础字段推导出来的特征
-DERIVED_FEATURES = (
-    "dur",    # 秒
-    "sload",  # 源方向比特率 bps
-    "dload",  # 目的方向比特率 bps
-)
-
-# 协议：我们的采集只能稳定区分 TCP / 非 TCP
-PROTO_FEATURES = ("proto_tcp",)
-
-FEATURE_NAMES = DIRECT_FEATURES + DERIVED_FEATURES + PROTO_FEATURES
-
-# 我们用不到但数据集里存在的列，训练时必须丢弃
-DATASET_EXTRA_COLUMNS = (
-    "state",
-    "service",
-    "sttl",
-    "dttl",
-    "sloss",
-    "dloss",
-    "swin",
-    "stcpb",
-    "dtcpb",
-    "dwin",
-    "tcprtt",
-    "synack",
-    "ackdat",
-    "trans_depth",
-    "response_body_len",
-    "ct_srv_src",
-    "ct_state_ttl",
-    "ct_dst_ltm",
-    "ct_src_dport_ltm",
-    "ct_dst_sport_ltm",
-    "ct_dst_src_ltm",
-    "is_ftp_login",
-    "ct_ftp_cmd",
-    "ct_flw_http_mthd",
-    "ct_src_ltm",
-    "ct_srv_dst",
-    "is_sm_ips_ports",
-)
-
-# 数据集里我们直接沿用的列名（dur 在数据集里是秒）
-DATASET_COLUMN_MAP = {
-    "spkts": "spkts",
-    "dpkts": "dpkts",
-    "sbytes": "sbytes",
-    "dbytes": "dbytes",
-    "smean": "smean",
-    "dmean": "dmean",
-    "sintpkt": "sinpkt",
-    "dintpkt": "dinpkt",
-    "sjit": "sjit",
-    "djit": "djit",
-    "rate": "rate",
-    "dur": "dur",
-}
+LABEL_COLUMN = "label"
+CATEGORY_COLUMN = "attack_cat"
 
 
-def _safe_float(value, default=0.0):
+def _f(value, default=0.0):
     try:
         number = float(value)
     except (TypeError, ValueError):
         return default
-    if number != number or number in (float("inf"), float("-inf")):  # NaN / inf
+    if number != number:  # NaN
+        return default
+    if number in (float("inf"), float("-inf")):
         return default
     return number
 
 
+def _weighted(a, wa, b, wb):
+    total = wa + wb
+    if total <= 0:
+        return 0.0
+    return (a * wa + b * wb) / total
+
+
+def aggregate_features(
+    dur,
+    spkts,
+    dpkts,
+    sbytes,
+    dbytes,
+    rate,
+    sload,
+    dload,
+    sinpkt,
+    dinpkt,
+    sjit,
+    djit,
+    proto,
+):
+    """两侧共用的特征公式。"""
+    spkts = _f(spkts)
+    dpkts = _f(dpkts)
+    sbytes = _f(sbytes)
+    dbytes = _f(dbytes)
+    dur = _f(dur)
+
+    pkts_total = spkts + dpkts
+    bytes_total = sbytes + dbytes
+
+    mean_pkt_size = bytes_total / pkts_total if pkts_total > 0 else 0.0
+    iat_mean = _weighted(_f(sinpkt), spkts, _f(dinpkt), dpkts)
+    jitter = _weighted(_f(sjit), spkts, _f(djit), dpkts)
+
+    proto_text = str(proto or "").lower()
+    proto_tcp = 1.0 if proto_text.startswith("tcp") else 0.0
+
+    return {
+        "pkts_total": pkts_total,
+        "bytes_total": bytes_total,
+        "dur": dur,
+        "rate": _f(rate),
+        "load_total": _f(sload) + _f(dload),
+        "mean_pkt_size": round(mean_pkt_size, 4),
+        "iat_mean": round(iat_mean, 4),
+        "jitter": round(jitter, 4),
+        "proto_tcp": proto_tcp,
+    }
+
+
 def flow_to_features(flow):
-    """把一条流记录转成特征字典（键为 FEATURE_NAMES）。"""
-    duration_seconds = _safe_float(flow.get("dur_ms")) / 1000.0
-    sbytes = _safe_float(flow.get("sbytes"))
-    dbytes = _safe_float(flow.get("dbytes"))
+    """把一条采集到的流记录转成特征字典。"""
+    duration_seconds = _f(flow.get("dur_ms")) / 1000.0
+    sbytes = _f(flow.get("sbytes"))
+    dbytes = _f(flow.get("dbytes"))
 
     if duration_seconds > 0:
         sload = sbytes * 8 / duration_seconds
@@ -112,28 +135,47 @@ def flow_to_features(flow):
         sload = 0.0
         dload = 0.0
 
-    proto = str(flow.get("proto", "tcp")).lower()
+    return aggregate_features(
+        dur=duration_seconds,
+        spkts=flow.get("spkts"),
+        dpkts=flow.get("dpkts"),
+        sbytes=sbytes,
+        dbytes=dbytes,
+        rate=flow.get("rate"),
+        sload=sload,
+        dload=dload,
+        sinpkt=flow.get("sintpkt"),
+        dinpkt=flow.get("dintpkt"),
+        sjit=flow.get("sjit"),
+        djit=flow.get("djit"),
+        proto=flow.get("proto", "tcp"),
+    )
 
-    return {
-        "spkts": _safe_float(flow.get("spkts")),
-        "dpkts": _safe_float(flow.get("dpkts")),
-        "sbytes": sbytes,
-        "dbytes": dbytes,
-        "smean": _safe_float(flow.get("smean")),
-        "dmean": _safe_float(flow.get("dmean")),
-        "sintpkt": _safe_float(flow.get("sintpkt")),
-        "dintpkt": _safe_float(flow.get("dintpkt")),
-        "sjit": _safe_float(flow.get("sjit")),
-        "djit": _safe_float(flow.get("djit")),
-        "rate": _safe_float(flow.get("rate")),
-        "dur": duration_seconds,
-        "sload": round(sload, 3),
-        "dload": round(dload, 3),
-        "proto_tcp": 1.0 if proto.startswith("tcp") else 0.0,
-    }
+
+def dataset_row_to_features(row):
+    """把 UNSW-NB15 的一行转成同样的特征字典。"""
+    return aggregate_features(
+        dur=row.get("dur"),
+        spkts=row.get("spkts"),
+        dpkts=row.get("dpkts"),
+        sbytes=row.get("sbytes"),
+        dbytes=row.get("dbytes"),
+        rate=row.get("rate"),
+        sload=row.get("sload"),
+        dload=row.get("dload"),
+        sinpkt=row.get("sinpkt"),
+        dinpkt=row.get("dinpkt"),
+        sjit=row.get("sjit"),
+        djit=row.get("djit"),
+        proto=row.get("proto"),
+    )
+
+
+def vector_from_dict(features):
+    """按 FEATURE_NAMES 顺序输出列表。"""
+    return [features[name] for name in FEATURE_NAMES]
 
 
 def vector(flow):
-    """按 FEATURE_NAMES 顺序输出列表，可直接喂给模型。"""
-    features = flow_to_features(flow)
-    return [features[name] for name in FEATURE_NAMES]
+    """流记录直接转成模型输入向量。"""
+    return vector_from_dict(flow_to_features(flow))
