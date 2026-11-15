@@ -33,6 +33,7 @@ MODULES = [
     "collect.asset",
     "collect.detect",
     "collect.store",
+    "collect.netflow",
     "collect.etw.providers",
     "collect.etw.session",
     "collect.etw.consumer",

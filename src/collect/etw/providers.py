@@ -109,8 +109,9 @@ SYSMON_CORE_EVENTS = (1, 5)
 ALL_PROVIDERS = (KERNEL_PROCESS, KERNEL_FILE, KERNEL_NETWORK, KERNEL_REGISTRY, SYSMON)
 
 # 进程采集以 Kernel-Process 为骨干，Sysmon 补充命令行与进程 GUID。
+# Kernel-Network 提供带字节数的网络事件，用于流特征聚合（P9b）。
 # 未安装 Sysmon 的环境会自动跳过该提供者（见 EtwCollector.start 的容错）。
-DEFAULT_PROVIDERS = (KERNEL_PROCESS, SYSMON)
+DEFAULT_PROVIDERS = (KERNEL_PROCESS, SYSMON, KERNEL_NETWORK)
 
 
 def guid_bytes(guid_text):

@@ -22,6 +22,10 @@ from .tdh import LayoutCache
 # 值是要取的字段名（None 表示全部），用于高频事件做裁剪。
 _KERNEL_GUID = provider_specs.guid_bytes(provider_specs.KERNEL_PROCESS.guid)
 _SYSMON_GUID = provider_specs.guid_bytes(provider_specs.SYSMON.guid)
+_KERNEL_NET_GUID = provider_specs.guid_bytes(provider_specs.KERNEL_NETWORK.guid)
+
+# 内核网络事件只取这几个字段：五元组 + 字节数
+_NET_FIELDS = ("PID", "size", "saddr", "sport", "daddr", "dport", "connid")
 
 # 文件事件只取这几个字段：Sysmon 的 FileCreate/FileDelete 字段不多，
 # 但两者都出现在高频路径上，裁剪后能省掉一半以上的 API 往返。
@@ -159,18 +163,22 @@ class EtwConsumer:
             )
 
             decoded = {}
-            if self._decode_all and properties:
+            if properties:
                 try:
-                    decoded = tdh.decode_fields(record, properties)
+                    if self._decode_all:
+                        decoded = tdh.decode_fields(record, properties)
+                    elif provider_id == _KERNEL_NET_GUID:
+                        # 内核网络事件 ID 较多且语义按版本变化，
+                        # 一律只取五元组与字节数这几个字段
+                        decoded = tdh.decode_fields(record, properties, _NET_FIELDS)
+                    else:
+                        wanted = _DECODE_EVENTS.get(
+                            (provider_id, descriptor.Id), _NOT_DECODED
+                        )
+                        if wanted is not _NOT_DECODED:
+                            decoded = tdh.decode_fields(record, properties, wanted)
                 except Exception:  # noqa: BLE001
                     decoded = {}
-            else:
-                wanted = _DECODE_EVENTS.get((provider_id, descriptor.Id), _NOT_DECODED)
-                if wanted is not _NOT_DECODED and properties:
-                    try:
-                        decoded = tdh.decode_fields(record, properties, wanted)
-                    except Exception:  # noqa: BLE001
-                        decoded = {}
 
             raw = RawEvent(
                 ts_ns=(header.TimeStamp - FILETIME_EPOCH_DELTA) * 100,

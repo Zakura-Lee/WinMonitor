@@ -51,6 +51,8 @@ class MonitorService:
         self.etw_fallback_reason = None
         self.active_collectors = []
         self.event_store = None
+        self.flow_monitor = None
+        self.network_flows = []
         # 活跃进程表：用 GUID / 进程序号做键，供父链查询与终止事件补全
         try:
             from collect.proctree import ProcessTable
@@ -110,12 +112,48 @@ class MonitorService:
         except Exception:  # noqa: BLE001
             logging.debug("初始化事件存储失败", exc_info=True)
             self.event_store = None
+
+        # 网络流聚合：把内核网络事件摊成流特征
+        try:
+            from collect.netflow import FlowMonitor
+
+            local_ips = []
+            try:
+                from collect.asset import collect_adapters
+
+                for adapter in collect_adapters():
+                    local_ips.extend(adapter.get("ip_addresses") or [])
+            except Exception:  # noqa: BLE001
+                logging.debug("获取本机地址失败，流方向将只按发起方判定", exc_info=True)
+
+            self.flow_monitor = FlowMonitor(
+                on_flow=self._on_flow,
+                window_seconds=getattr(config, "NETFLOW_WINDOW_SECONDS", 15.0),
+                local_ips=local_ips,
+            )
+            self.flow_monitor.start()
+        except Exception:  # noqa: BLE001
+            logging.debug("初始化流聚合失败", exc_info=True)
+            self.flow_monitor = None
         return True
+
+    def _on_flow(self, record):
+        """流聚合产出的特征记录：进内存列表并落盘。"""
+        self.network_flows.insert(0, record)
+        del self.network_flows[500:]
+        if self.event_store is not None:
+            self.event_store.write_record(record)
 
     def _on_etw_event(self, event):
         """把采集层的 Event 分派到进程、网络或文件处理。"""
         if self.event_store is not None:
             self.event_store.write(event)
+
+        if event.provider == "Microsoft-Windows-Kernel-Network":
+            # 内核网络事件不参与单事件判定，交给流聚合
+            if self.flow_monitor is not None:
+                self.flow_monitor.add_event(event)
+            return
 
         is_sysmon = event.provider == "Microsoft-Windows-Sysmon"
 
@@ -310,6 +348,13 @@ class MonitorService:
                 logging.debug("关闭事件存储时出错", exc_info=True)
             self.event_store = None
 
+        if self.flow_monitor is not None:
+            try:
+                self.flow_monitor.stop()
+            except Exception:  # noqa: BLE001
+                logging.debug("停止流聚合时出错", exc_info=True)
+            self.flow_monitor = None
+
     # -- 生命周期 ---------------------------------------------------------
 
     def start(self, username=None):
@@ -432,6 +477,8 @@ class MonitorService:
                 pass
         if self.event_store is not None:
             result["event_store"] = self.event_store.stats()
+        if self.flow_monitor is not None:
+            result["netflow"] = self.flow_monitor.stats()
         if self.process_table is not None:
             result["process_table"] = self.process_table.stats()
         return result

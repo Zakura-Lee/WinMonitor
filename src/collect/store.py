@@ -124,6 +124,25 @@ class EventStore:
             self.written += 1
             return True
 
+    def write_record(self, record):
+        """写入任意字典记录（如网络流特征），不经过事件白名单。"""
+        if not self.enabled or not record:
+            return False
+        with self._lock:
+            self._ensure_file()
+            if self._hour_count >= self.max_per_hour:
+                self.dropped += 1
+                return False
+            try:
+                self._handle.write(json.dumps(record, ensure_ascii=False))
+                self._handle.write("\n")
+            except (OSError, TypeError):
+                self.dropped += 1
+                return False
+            self._hour_count += 1
+            self.written += 1
+            return True
+
     def flush(self):
         with self._lock:
             if self._handle is not None:

@@ -441,6 +441,9 @@ EVENT_STORE_RETAIN_DAYS = 3
 # 单小时上限，超出后采样丢弃，防止文件事件刷爆磁盘
 EVENT_STORE_MAX_PER_HOUR = 200000
 
+# 网络流聚合窗口（秒）：一条流空闲超过该时长即输出
+NETFLOW_WINDOW_SECONDS = 15.0
+
 # LLM 复核层（P9c 起使用）
 LLM_PROVIDER = "deepseek"
 LLM_BASE_URL = os.environ.get("WINMON_LLM_BASE_URL", "https://api.deepseek.com")

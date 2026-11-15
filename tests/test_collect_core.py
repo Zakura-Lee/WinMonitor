@@ -570,6 +570,40 @@ def test_etw_backend_falls_back_without_admin():
     assert service.etw_fallback_reason
 
 
+def test_to_event_kernel_network():
+    """内核网络事件：地址是小端整数，需要转成点分字符串。
+
+    这里直接注入 decoded 字段，模拟 TdhGetProperty 的解码结果，
+    避免走偏移推算那条容易漂移的老路。
+    """
+    raw = RawEvent(
+        ts_ns=1,
+        provider_id=providers.guid_bytes(providers.KERNEL_NETWORK.guid),
+        event_id=11,
+        level=4,
+        keyword=0,
+        pid=1234,
+        tid=1,
+        payload=b"",
+        properties=(),
+        decoded={
+            "PID": 1234,
+            "size": 160,
+            # 内核网络地址是小端字节序：字节 0A 00 00 05 = 10.0.0.5
+            "saddr": 0x0500000A,
+            "sport": 51000,
+            "daddr": 0x08080808,  # 8.8.8.8
+            "dport": 443,
+        },
+    )
+    event = normalize.to_event(raw)
+    assert event.saddr == "10.0.0.5"
+    assert event.sport == 51000
+    assert event.daddr == "8.8.8.8"
+    assert event.dport == 443
+    assert event.extra["size"] == 160
+
+
 def test_collector_importable():
     from collect.collector import EtwCollector
 
@@ -578,6 +612,7 @@ def test_collector_importable():
     assert [spec.name for spec in collector.provider_specs] == [
         "Microsoft-Windows-Kernel-Process",
         "Microsoft-Windows-Sysmon",
+        "Microsoft-Windows-Kernel-Network",
     ]
     assert collector.stats()["handled"] == 0
     assert collector.disabled_providers == []

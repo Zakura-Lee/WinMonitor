@@ -11,6 +11,7 @@ import ctypes
 
 from .etw import providers, tdh
 from .model import Event
+from .netflow import ipv4_from_int
 
 _DEVICE_CACHE = None
 _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -149,6 +150,7 @@ def to_event(raw, provider_names=None):
     reg_key = ""
     reg_value = ""
     reg_action = ""
+    net_size = 0
 
     if provider_name == providers.KERNEL_PROCESS.name:
         # 实测对账：事件头 pid 即事件主体（8/8 命中真实 PID）
@@ -156,6 +158,13 @@ def to_event(raw, provider_names=None):
         ppid = _field(fields, "ParentProcessID", "ParentProcessId", default=0)
         # 该提供者没有 UniqueProcessKey，用序号作为 PID 复用的判别键
         process_key = _field(fields, "ProcessSequenceNumber", "ProcessKey", default=0)
+    elif provider_name == providers.KERNEL_NETWORK.name:
+        # 内核网络事件：地址是小端整数，字节数在 size 字段
+        saddr = ipv4_from_int(_field(fields, "saddr", default=0))
+        daddr = ipv4_from_int(_field(fields, "daddr", default=0))
+        sport = _to_int(_field(fields, "sport"))
+        dport = _to_int(_field(fields, "dport"))
+        net_size = _to_int(_field(fields, "size"))
     elif provider_name == providers.SYSMON.name:
         # Sysmon 的事件由 Sysmon64.exe 记录，头里的 pid 是它自己
         pid = _field(fields, "ProcessId", "ProcessID", default=raw.pid)
@@ -218,4 +227,6 @@ def to_event(raw, provider_names=None):
     event.extra = {"fields": fields, "strings": strings}
     if reg_action:
         event.extra["registry_action"] = reg_action
+    if net_size:
+        event.extra["size"] = net_size
     return event
