@@ -50,6 +50,7 @@ class MonitorService:
         self.etw_primary = None
         self.etw_fallback_reason = None
         self.active_collectors = []
+        self.event_store = None
         # 活跃进程表：用 GUID / 进程序号做键，供父链查询与终止事件补全
         try:
             from collect.proctree import ProcessTable
@@ -95,10 +96,27 @@ class MonitorService:
 
         self.etw_collector = collector
         self.etw_fallback_reason = None
+
+        # 事件持久化：检测层训练与复盘都依赖这份数据
+        try:
+            from collect.store import EventStore
+
+            self.event_store = EventStore(
+                config.EVENT_STORE_DIR,
+                retain_days=getattr(config, "EVENT_STORE_RETAIN_DAYS", 3),
+                max_per_hour=getattr(config, "EVENT_STORE_MAX_PER_HOUR", 200000),
+                enabled=getattr(config, "EVENT_STORE_ENABLED", True),
+            )
+        except Exception:  # noqa: BLE001
+            logging.debug("初始化事件存储失败", exc_info=True)
+            self.event_store = None
         return True
 
     def _on_etw_event(self, event):
         """把采集层的 Event 分派到进程、网络或文件处理。"""
+        if self.event_store is not None:
+            self.event_store.write(event)
+
         is_sysmon = event.provider == "Microsoft-Windows-Sysmon"
 
         if is_sysmon:
@@ -277,14 +295,20 @@ class MonitorService:
                 logging.debug("告警队列已满，丢弃注册表告警")
 
     def _stop_etw_backend(self):
-        if self.etw_collector is None:
-            return
-        try:
-            self.etw_collector.stop()
-        except Exception:  # noqa: BLE001
-            logging.debug("停止 ETW 采集器时出错", exc_info=True)
+        if self.etw_collector is not None:
+            try:
+                self.etw_collector.stop()
+            except Exception:  # noqa: BLE001
+                logging.debug("停止 ETW 采集器时出错", exc_info=True)
         self.etw_collector = None
         self.etw_primary = None
+
+        if self.event_store is not None:
+            try:
+                self.event_store.close()
+            except Exception:  # noqa: BLE001
+                logging.debug("关闭事件存储时出错", exc_info=True)
+            self.event_store = None
 
     # -- 生命周期 ---------------------------------------------------------
 
@@ -406,6 +430,8 @@ class MonitorService:
                 }
             except Exception:  # noqa: BLE001
                 pass
+        if self.event_store is not None:
+            result["event_store"] = self.event_store.stats()
         if self.process_table is not None:
             result["process_table"] = self.process_table.stats()
         return result

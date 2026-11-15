@@ -432,3 +432,18 @@ THREAD_JOIN_TIMEOUT = 5
 # ETW 后端需要管理员权限；启动失败会自动回退到 legacy。
 # 可通过环境变量 WINMON_BACKEND 覆盖，便于对照实验。
 MONITOR_BACKEND = os.environ.get("WINMON_BACKEND", "legacy").strip().lower()
+
+# 事件持久化（P9a）
+# 检测层要训练就必须有历史事件；这里把事件按小时落成 JSONL。
+EVENT_STORE_ENABLED = os.environ.get("WINMON_EVENT_STORE", "1") != "0"
+EVENT_STORE_DIR = os.path.join(_PROJECT_ROOT, "data", "events")
+EVENT_STORE_RETAIN_DAYS = 3
+# 单小时上限，超出后采样丢弃，防止文件事件刷爆磁盘
+EVENT_STORE_MAX_PER_HOUR = 200000
+
+# LLM 复核层（P9c 起使用）
+LLM_PROVIDER = "deepseek"
+LLM_BASE_URL = os.environ.get("WINMON_LLM_BASE_URL", "https://api.deepseek.com")
+LLM_MODEL = os.environ.get("WINMON_LLM_MODEL", "deepseek-chat")
+LLM_TIMEOUT = 20
+LLM_MAX_TOKENS = 800
