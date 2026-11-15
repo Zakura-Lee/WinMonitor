@@ -34,7 +34,7 @@ def _traffic():
         threading.Thread(
             target=lambda h=host, p=port: _connect(h, p), daemon=True
         ).start()
-    _local_roundtrip()
+    _bulk_local_transfer()
 
 
 def _connect(host, port):
@@ -46,20 +46,29 @@ def _connect(host, port):
         pass
 
 
-def _local_roundtrip():
+def _bulk_local_transfer():
+    """单向发送 512KB，用于判断哪个 EventID 承载「发出」方向的字节。"""
     server = socket.socket()
     try:
         server.bind(("127.0.0.1", 0))
         server.listen(1)
         port = server.getsockname()[1]
-        client = socket.create_connection(("127.0.0.1", port), timeout=2)
-        client.sendall(b"hello" * 32)
+        client = socket.create_connection(("127.0.0.1", port), timeout=3)
         peer, _ = server.accept()
-        peer.recv(4096)
+
+        chunk = b"A" * 8192
+        sent = 0
+        try:
+            for _ in range(64):  # 64 * 8KB = 512KB
+                sent += client.send(chunk)
+        except OSError:
+            pass
+        print(f"  单向发送完成: {sent} 字节")
+        time.sleep(0.3)
         peer.close()
         client.close()
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"  单向发送失败: {exc}")
     finally:
         server.close()
 
@@ -135,6 +144,18 @@ def main(argv=None):
     all_fields = set()
     for raw in records:
         all_fields.update((raw.decoded or {}).keys())
+
+    # 每个事件 ID 的字节总量：哪个 ID 拿到了 512KB，哪个就是「发出」方向
+    print()
+    print("按事件 ID 统计字节量:")
+    for event_id in sorted(per_id):
+        total_size = sum(
+            int((raw.decoded or {}).get("size") or 0)
+            for raw in records
+            if raw.event_id == event_id
+        )
+        print(f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  字节 {total_size:>10}")
+
     hints = [n for n in all_fields if any(k in n.lower() for k in ("size", "byte", "length", "count"))]
     print(f"全部出现过的字段名: {sorted(all_fields)}")
     print()

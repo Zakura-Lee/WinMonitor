@@ -113,6 +113,17 @@ def _to_int(value, default=0):
         return default
 
 
+def _swap16(value):
+    """16 位字节序翻转。
+
+    内核网络事件里的端口字段是网络字节序（大端），
+    而 TdhGetProperty 返回的整数是按小端拼出来的，
+    所以 443（0x01BB）会变成 47873（0xBB01），必须换回来。
+    """
+    number = int(value or 0) & 0xFFFF
+    return ((number & 0xFF) << 8) | ((number >> 8) & 0xFF)
+
+
 def to_event(raw, provider_names=None):
     """把 RawEvent 转成 Event。
 
@@ -159,11 +170,13 @@ def to_event(raw, provider_names=None):
         # 该提供者没有 UniqueProcessKey，用序号作为 PID 复用的判别键
         process_key = _field(fields, "ProcessSequenceNumber", "ProcessKey", default=0)
     elif provider_name == providers.KERNEL_NETWORK.name:
-        # 内核网络事件：地址是小端整数，字节数在 size 字段
+        # 内核网络事件：
+        #   地址按「小端整数」读再按小端打包正好还原（网络字节序）
+        #   端口却是纯网络字节序，必须手动换字节，否则 443 会变成 47873
         saddr = ipv4_from_int(_field(fields, "saddr", default=0))
         daddr = ipv4_from_int(_field(fields, "daddr", default=0))
-        sport = _to_int(_field(fields, "sport"))
-        dport = _to_int(_field(fields, "dport"))
+        sport = _swap16(_to_int(_field(fields, "sport")))
+        dport = _swap16(_to_int(_field(fields, "dport")))
         net_size = _to_int(_field(fields, "size"))
     elif provider_name == providers.SYSMON.name:
         # Sysmon 的事件由 Sysmon64.exe 记录，头里的 pid 是它自己
