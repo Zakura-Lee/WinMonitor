@@ -32,6 +32,7 @@ MODULES = [
     "collect.proctree",
     "collect.asset",
     "collect.detect",
+    "collect.store",
     "collect.etw.providers",
     "collect.etw.session",
     "collect.etw.consumer",
