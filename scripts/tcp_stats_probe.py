@@ -79,19 +79,14 @@ class MIB_TCPROW(ctypes.Structure):
     ]
 
 
-def _addr_to_int(text):
-    return struct.unpack("<I", socket.inet_aton(text))[0]
-
-
-def _port_to_int(port):
-    # 端口在网络结构中按网络字节序存放，这里换算成 DWORD 的低 16 位
-    return ((port & 0xFF) << 8) | ((port >> 8) & 0xFF)
-
-
 def list_tcp_connections():
-    """返回 [(local_ip, local_port, remote_ip, remote_port, pid, state)]。"""
+    """返回 [(格式化元组, 原始行)]。
+
+    原始行里的端口是网络字节序的 DWORD，回传给 EStats 时必须原样使用，
+    所以两个都给出来，避免来回转换出错。
+    """
     size = wintypes.DWORD(0)
-    result = _iphlpapi.GetExtendedTcpTable(
+    _iphlpapi.GetExtendedTcpTable(
         None, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0
     )
     buffer = ctypes.create_string_buffer(size.value)
@@ -112,14 +107,19 @@ def list_tcp_connections():
     entries = []
     for index in range(count):
         row = rows[index]
+        raw = MIB_TCPROW_OWNER_PID()
+        ctypes.pointer(raw)[0] = row
         entries.append(
             (
-                socket.inet_ntoa(struct.pack("<I", row.dwLocalAddr)),
-                socket.ntohs(row.dwLocalPort & 0xFFFF),
-                socket.inet_ntoa(struct.pack("<I", row.dwRemoteAddr)),
-                socket.ntohs(row.dwRemotePort & 0xFFFF),
-                row.dwOwningPid,
-                row.dwState,
+                (
+                    socket.inet_ntoa(struct.pack("<I", row.dwLocalAddr)),
+                    socket.ntohs(row.dwLocalPort & 0xFFFF),
+                    socket.inet_ntoa(struct.pack("<I", row.dwRemoteAddr)),
+                    socket.ntohs(row.dwRemotePort & 0xFFFF),
+                    row.dwOwningPid,
+                    row.dwState,
+                ),
+                raw,
             )
         )
     return entries
@@ -129,35 +129,33 @@ class TCP_ESTATS_DATA_RW_v0(ctypes.Structure):
     _fields_ = [("EnableCollection", ctypes.c_ubyte)]
 
 
-def enable_data_stats(local_ip, local_port, remote_ip, remote_port):
-    """EStats 需要先逐连接启用采集，否则读出来的 ROD 是未初始化内存。"""
-    row = MIB_TCPROW()
-    row.dwState = 5
-    row.dwLocalAddr = _addr_to_int(local_ip)
-    row.dwLocalPort = _port_to_int(local_port)
-    row.dwRemoteAddr = _addr_to_int(remote_ip)
-    row.dwRemotePort = _port_to_int(remote_port)
+def _row_to_mib(row_owner):
+    """把带 PID 的行裁成 EStats 需要的形式，字段原样保留。"""
+    mib = MIB_TCPROW()
+    mib.dwState = row_owner.dwState
+    mib.dwLocalAddr = row_owner.dwLocalAddr
+    mib.dwLocalPort = row_owner.dwLocalPort
+    mib.dwRemoteAddr = row_owner.dwRemoteAddr
+    mib.dwRemotePort = row_owner.dwRemotePort
+    return mib
 
+
+def enable_data_stats(row_owner):
+    """EStats 需要先逐连接启用采集，否则读出来的 ROD 是未初始化内存。"""
+    row = _row_to_mib(row_owner)
     rw = TCP_ESTATS_DATA_RW_v0(1)
-    result = _iphlpapi.SetPerTcpConnectionEStats(
+    return _iphlpapi.SetPerTcpConnectionEStats(
         ctypes.byref(row),
         TcpConnectionEstatsData,
         ctypes.byref(rw), 0, ctypes.sizeof(rw),
         None, 0, 0,
         None, 0, 0,
     )
-    return result
 
 
-def read_data_stats(local_ip, local_port, remote_ip, remote_port):
+def read_data_stats(row_owner):
     """读取单个连接的收发统计，返回 (dict, 返回码)。"""
-    row = MIB_TCPROW()
-    row.dwState = 5  # MIB_TCP_STATE_ESTAB
-    row.dwLocalAddr = _addr_to_int(local_ip)
-    row.dwLocalPort = _port_to_int(local_port)
-    row.dwRemoteAddr = _addr_to_int(remote_ip)
-    row.dwRemotePort = _port_to_int(remote_port)
-
+    row = _row_to_mib(row_owner)
     data = TCP_ESTATS_DATA_ROD_v0()
     result = _iphlpapi.GetPerTcpConnectionEStats(
         ctypes.byref(row),
@@ -207,16 +205,18 @@ def main():
 
     try:
         entries = [
-            e for e in list_tcp_connections()
-            if e[1] == local_port and e[3] == remote_port
+            (formatted, raw)
+            for formatted, raw in list_tcp_connections()
+            if formatted[1] == local_port and formatted[3] == remote_port
         ]
-        print(f"[INFO] 表里匹配到的行: {entries}")
+        print(f"[INFO] 表里匹配到的行: {[e[0] for e in entries]}")
         if not entries:
             print("[STOP] GetExtendedTcpTable 没有列出这条连接")
             return 5
+        row_owner = entries[0][1]
 
         # 先启用采集，再发数据，否则统计只从启用那一刻开始计
-        rc = enable_data_stats(local_ip, local_port, remote_ip, remote_port)
+        rc = enable_data_stats(row_owner)
         print(f"[INFO] 启用采集返回码 = {rc}"
               f"{'（0=成功）' if rc == 0 else '（5=拒绝访问，其它见 Win32 错误码）'}")
 
@@ -233,7 +233,7 @@ def main():
         last_rc = None
         for attempt in range(4):
             time.sleep(0.4)
-            stats, last_rc = read_data_stats(local_ip, local_port, remote_ip, remote_port)
+            stats, last_rc = read_data_stats(row_owner)
             print(f"[INFO] 第 {attempt + 1} 次读取: 返回码={last_rc}  统计={stats}")
             if stats is not None:
                 break
