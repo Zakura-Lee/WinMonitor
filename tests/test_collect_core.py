@@ -591,9 +591,10 @@ def test_to_event_kernel_network():
             "size": 160,
             # 内核网络地址是小端字节序：字节 0A 00 00 05 = 10.0.0.5
             "saddr": 0x0500000A,
-            "sport": 51000,
+            # 端口是网络字节序：真实 51000 在这个字段里读出来是 14535
+            "sport": 14535,
             "daddr": 0x08080808,  # 8.8.8.8
-            "dport": 443,
+            "dport": 47873,  # 真实 443 的字节序翻转值
         },
     )
     event = normalize.to_event(raw)
