@@ -87,10 +87,30 @@ def main(argv=None):
 
     records = []
     per_id = collections.Counter()
+    # 字节量必须在回调里累积：records 只留前 200 条用于打印，
+    # 从截断列表求和会得到错误的字节总量。
+    per_id_bytes = collections.Counter()
+    per_id_local_first = collections.Counter()
+    flow_bytes = collections.Counter()          # 五元组 -> 总字节
+    flow_id_bytes = collections.Counter()       # (五元组, 事件ID) -> 字节
 
     def sink(raw):
-        per_id[raw.event_id] += 1
-        if len(records) < 200:
+        fields = raw.decoded or {}
+        size = int(fields.get("size") or 0)
+        sid = raw.event_id
+        per_id[sid] += 1
+        per_id_bytes[sid] += size
+
+        key = (
+            fields.get("saddr"),
+            fields.get("sport"),
+            fields.get("daddr"),
+            fields.get("dport"),
+        )
+        flow_bytes[key] += size
+        flow_id_bytes[(key, sid)] += size
+
+        if len(records) < 400:
             records.append(raw)
 
     session = EtwSession("WinMonitorKernelNet", buffer_size_kb=256, max_buffers=64)
@@ -148,26 +168,36 @@ def main(argv=None):
     for raw in records:
         all_fields.update((raw.decoded or {}).keys())
 
-    # 每个事件 ID 的字节总量：哪个 ID 拿到了 4MB，哪个就是「发出」方向
+    # 每个事件 ID 的字节总量：哪个 ID 拿到了本次测试的字节，哪个就是「发出」
     print()
-    print("按事件 ID 统计字节量:")
-
-    # 出现次数最多的 saddr 基本就是本机地址，用它判断「本机在前」的比例
-    saddr_counter = collections.Counter(
-        (raw.decoded or {}).get("saddr") for raw in records
-    )
-    common_saddr = saddr_counter.most_common(1)[0][0] if saddr_counter else None
-
+    print("按事件 ID 统计字节量（全量累积）:")
     for event_id in sorted(per_id):
-        related = [raw for raw in records if raw.event_id == event_id]
-        total_size = sum(int((raw.decoded or {}).get("size") or 0) for raw in related)
-        local_first = sum(
-            1 for raw in related if (raw.decoded or {}).get("saddr") == common_saddr
-        )
         print(
             f"    ID {event_id:>3}  事件 {per_id[event_id]:>4}  "
-            f"字节 {total_size:>10}  本机在前 {local_first}/{len(related)}"
+            f"字节 {per_id_bytes[event_id]:>10}"
         )
+
+    # 只看字节量最大的那条流，排除背景流量干扰
+    if flow_bytes:
+        top_key, top_bytes = flow_bytes.most_common(1)[0]
+        print()
+        print(f"字节量最大的一条流: {top_key}  共 {top_bytes} 字节")
+        for (key, event_id), size in sorted(flow_id_bytes.items(), key=lambda x: -x[1]):
+            if key != top_key:
+                continue
+            count = sum(
+                1
+                for raw in records
+                if raw.event_id == event_id
+                and (
+                    (raw.decoded or {}).get("saddr"),
+                    (raw.decoded or {}).get("sport"),
+                    (raw.decoded or {}).get("daddr"),
+                    (raw.decoded or {}).get("dport"),
+                )
+                == key
+            )
+            print(f"    ID {event_id:>3}  字节 {size:>10}  字节占比 {size / top_bytes * 100:.1f}%")
 
     hints = [n for n in all_fields if any(k in n.lower() for k in ("size", "byte", "length", "count"))]
     print(f"全部出现过的字段名: {sorted(all_fields)}")
