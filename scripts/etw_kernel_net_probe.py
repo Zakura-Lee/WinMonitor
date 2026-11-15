@@ -102,23 +102,30 @@ def main(argv=None):
     print(f"消费者   : records={consumer.record_count} buffers={consumer.buffer_count} "
           f"errors={consumer.error_count}")
 
-    # 按事件 ID 各取第一条，打印全部字段
+    # 按事件 ID 各取一条「非回环」事件，打印全部字段
+    # 回环事件的地址两端都是 127.0.0.1，看不出方向与端口语义
+    LOOPBACK = 16777343  # 0x0100007F
     seen = set()
     printed = 0
     for raw in records:
+        fields = raw.decoded or {}
+        saddr, daddr = fields.get("saddr"), fields.get("daddr")
+        if saddr == LOOPBACK or daddr == LOOPBACK:
+            continue
         if raw.event_id in seen:
             continue
         seen.add(raw.event_id)
         printed += 1
         print()
         print(f"--- EventID {raw.event_id}  载荷 {len(raw.payload)} 字节 ---")
-        fields = raw.decoded or {}
-        if not fields:
-            print("    (无解码字段)")
         for name in sorted(fields):
             print(f"    {name:26s} = {fields[name]!r}")
         if printed >= 6:
             break
+
+    if printed == 0:
+        print()
+        print("(窗口内没有捕获到非回环事件——请确保有外网连接)")
 
     print()
     if not records:
